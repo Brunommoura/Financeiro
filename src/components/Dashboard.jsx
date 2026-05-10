@@ -109,7 +109,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   }, [patrimonio]);
 
   // Próximos parcelamentos
-  const proxParcelamentos = useMemo(() => calcNextInstallments(parcelamentos), [parcelamentos]);
+  const proxParcelamentos = useMemo(() => calcNextInstallments(parcelamentos, despesas), [parcelamentos, despesas]);
 
   // Alertas
   const alerts = useMemo(() => {
@@ -279,27 +279,17 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
             </div>
           )}
           <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={evolucaoData}>
-              <defs>
-                <linearGradient id="gradRec" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gradDesp" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                </linearGradient>
-              </defs>
+            <LineChart data={evolucaoData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="mes" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
               <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
               <Tooltip content={<CustomTooltipCurrency />} />
               <Legend />
               <ReferenceLine y={0} stroke="var(--border)" />
-              <Area type="monotone" dataKey="receitas" name="Receitas" stroke="#10b981" fill="url(#gradRec)" strokeWidth={2} dot={{ r: 4, fill: '#10b981' }} />
-              <Area type="monotone" dataKey="despesas" name="Despesas" stroke="#ef4444" fill="url(#gradDesp)" strokeWidth={2} dot={{ r: 4, fill: '#ef4444' }} />
+              <Line type="monotone" dataKey="receitas" name="Receitas" stroke="#10b981" strokeWidth={3} dot={{ r: 5, fill: '#10b981', strokeWidth: 2, stroke: 'var(--bg-card)' }} activeDot={{ r: 7 }} />
+              <Line type="monotone" dataKey="despesas" name="Despesas" stroke="#ef4444" strokeWidth={3} dot={{ r: 5, fill: '#ef4444', strokeWidth: 2, stroke: 'var(--bg-card)' }} activeDot={{ r: 7 }} />
               <Line type="monotone" dataKey="saldo" name="Saldo" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4, fill: '#3b82f6' }} strokeDasharray="5 5" />
-            </AreaChart>
+            </LineChart>
           </ResponsiveContainer>
         </div>
       )}

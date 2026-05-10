@@ -9,6 +9,7 @@ const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Principal' },
   { id: 'receitas', label: 'Receitas', icon: TrendingUp, section: 'Financeiro' },
   { id: 'despesas', label: 'Despesas', icon: TrendingDown, section: 'Financeiro' },
+  { id: 'cartoes', label: 'Cartões', icon: CreditCard, section: 'Financeiro' },
   { id: 'parcelamentos', label: 'Parcelamentos', icon: CreditCard, section: 'Financeiro' },
   { id: 'patrimonio', label: 'Patrimônio', icon: Landmark, section: 'Patrimônio' },
   { id: 'dividas', label: 'Dívidas', icon: Shield, section: 'Patrimônio' },

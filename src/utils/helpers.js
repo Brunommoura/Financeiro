@@ -105,22 +105,43 @@ export const formatMonthLabel = (monthKey) => {
   return `${months[parseInt(m) - 1]}/${y}`;
 };
 
-// Calcula próxima data de parcela
-export const calcNextInstallments = (parcelamentos) => {
-  const today = new Date();
-  return parcelamentos
-    .filter(p => p.parcelasPagas < p.parcelas)
-    .map(p => {
-      const firstDate = new Date(p.dataPrimeiraParcela);
-      const nextParcelNum = p.parcelasPagas + 1;
-      const nextDate = new Date(firstDate);
-      nextDate.setMonth(firstDate.getMonth() + p.parcelasPagas);
+export const calcNextInstallments = (parcelamentos, despesas) => {
+  if (!despesas) return [];
+  const novasPendentes = despesas
+    .filter(d => d.tipo === 'Parcelada' && d.status === 'Pendente' && d.installmentId)
+    .sort((a, b) => new Date(a.data) - new Date(b.data))
+    .map(d => {
+      const master = parcelamentos.find(p => p.id === d.installmentId);
+      const match = d.descricao.match(/Parcela (\d+\/\d+)/);
       return {
-        ...p,
-        proximaData: nextDate.toISOString().split('T')[0],
-        numeroParcela: `${nextParcelNum}/${p.parcelas}`,
-        parcelasRestantes: p.parcelas - p.parcelasPagas,
+        id: d.id,
+        nome: master ? master.description || master.nome : d.descricao.split(' -')[0],
+        numeroParcela: match ? `Parcela ${match[1]}` : 'Parcela',
+        proximaData: d.data,
+        valorParcela: d.valor,
+        parcelasRestantes: master ? despesas.filter(x => x.installmentId === master.id && x.status === 'Pendente').length : 0
       };
+    });
+
+  if (novasPendentes.length > 0) return novasPendentes.slice(0, 5);
+
+  return parcelamentos
+    .filter(p => (p.parcelasPagas || 0) < (p.parcelas || p.installmentCount || 0))
+    .map(p => {
+       const count = p.parcelas || p.installmentCount || 0;
+       const pagas = p.parcelasPagas || 0;
+       const firstDate = new Date(p.dataPrimeiraParcela || p.startDate || new Date().toISOString().split('T')[0]);
+       const nextDate = new Date(firstDate);
+       nextDate.setMonth(firstDate.getMonth() + pagas);
+       return {
+         id: p.id,
+         nome: p.description || p.nome,
+         numeroParcela: `Parcela ${pagas + 1}/${count}`,
+         proximaData: nextDate.toISOString().split('T')[0],
+         valorParcela: p.installmentValue || p.valorParcela || 0,
+         parcelasRestantes: count - pagas
+       };
     })
-    .sort((a, b) => new Date(a.proximaData) - new Date(b.proximaData));
+    .sort((a, b) => new Date(a.proximaData) - new Date(b.proximaData))
+    .slice(0, 5);
 };

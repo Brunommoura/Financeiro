@@ -4,6 +4,7 @@ import Dashboard from './components/Dashboard';
 import Receitas from './components/Receitas';
 import Despesas from './components/Despesas';
 import Parcelamentos from './components/Parcelamentos';
+import Cartoes from './components/Cartoes';
 import Patrimonio from './components/Patrimonio';
 import Dividas from './components/Dividas';
 import Metas from './components/Metas';
@@ -35,6 +36,8 @@ export default function App() {
   const [viewMode, setViewMode] = useState('geral');
   const [selectedMonth, setSelectedMonth] = useState('');
 
+  const [categories, setCategories] = useState(() => loadData().categories || sampleData.categories);
+  const [cartoes, setCartoes] = useState(() => loadData().cartoes || sampleData.cartoes);
   const [receitas, setReceitas] = useState(() => loadData().receitas);
   const [despesas, setDespesas] = useState(() => loadData().despesas);
   const [parcelamentos, setParcelamentos] = useState(() => loadData().parcelamentos);
@@ -44,6 +47,8 @@ export default function App() {
   const [tarefas, setTarefas] = useState(() => loadData().tarefas);
   const [habitos, setHabitos] = useState(() => loadData().habitos);
   const [patrimonioHistorico] = useState(() => loadData().patrimonioHistorico);
+  const [aproveitamentoMensal, setAproveitamentoMensal] = useState(() => loadData().aproveitamentoMensal || sampleData.aproveitamentoMensal);
+  const [receitasDespesasMensais] = useState(() => loadData().receitasDespesasMensais || sampleData.receitasDespesasMensais);
 
   // Apply theme
   useEffect(() => {
@@ -53,8 +58,8 @@ export default function App() {
 
   // Persist data on every change
   useEffect(() => {
-    saveData({ receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico });
-  }, [receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico]);
+    saveData({ categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais });
+  }, [categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
 
   // Available months
   const availableMonths = useMemo(() => getAvailableMonths(receitas, despesas), [receitas, despesas]);
@@ -76,12 +81,14 @@ export default function App() {
   }, []);
 
   const data = useMemo(() => ({
-    receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico
-  }), [receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico]);
+    categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
+  }), [categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
 
   // Reset to sample data
   const handleReset = () => {
     if (window.confirm('Tem certeza que deseja resetar todos os dados para os valores de exemplo? Esta ação não pode ser desfeita.')) {
+      setCategories(sampleData.categories);
+      setCartoes(sampleData.cartoes);
       setReceitas(sampleData.receitas);
       setDespesas(sampleData.despesas);
       setParcelamentos(sampleData.parcelamentos);
@@ -90,6 +97,7 @@ export default function App() {
       setMetas(sampleData.metas);
       setTarefas(sampleData.tarefas);
       setHabitos(sampleData.habitos);
+      setAproveitamentoMensal(sampleData.aproveitamentoMensal);
     }
   };
 
@@ -98,11 +106,13 @@ export default function App() {
       case 'dashboard':
         return <Dashboard data={data} viewMode={viewMode} setViewMode={setViewMode} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} availableMonths={availableMonths} />;
       case 'receitas':
-        return <Receitas receitas={receitas} setReceitas={setReceitas} />;
+        return <Receitas receitas={receitas} setReceitas={setReceitas} categories={categories} setCategories={setCategories} />;
       case 'despesas':
-        return <Despesas despesas={despesas} setDespesas={setDespesas} />;
+        return <Despesas despesas={despesas} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} />;
+      case 'cartoes':
+        return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesas} />;
       case 'parcelamentos':
-        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} />;
+        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesas} setDespesas={setDespesas} cartoes={cartoes} categories={categories} />;
       case 'patrimonio':
         return <Patrimonio patrimonio={patrimonio} setPatrimonio={setPatrimonio} />;
       case 'dividas':
@@ -110,7 +120,7 @@ export default function App() {
       case 'metas':
         return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} />;
       case 'produtividade':
-        return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} />;
+        return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} />;
       default:
         return null;
     }
