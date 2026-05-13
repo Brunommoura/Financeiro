@@ -15,7 +15,8 @@ export const formatPercent = (value, decimals = 1) => {
 // Formata data de ISO para DD/MM/YYYY
 export const formatDate = (dateStr) => {
   if (!dateStr) return '';
-  const [y, m, d] = dateStr.split('-');
+  const datePart = dateStr.split('T')[0];
+  const [y, m, d] = datePart.split('-');
   return `${d}/${m}/${y}`;
 };
 

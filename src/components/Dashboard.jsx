@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Wallet, PiggyBank, AlertTriangle, CheckCircle, Info, Minus } from 'lucide-react';
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Area, AreaChart, BarChart, Bar, ReferenceLine
 } from 'recharts';
 import { formatCurrency, formatPercent, getMonthKey, formatMonthLabel, calcNextInstallments } from '../utils/helpers';
+import { account } from '../lib/appwrite';
 
 const COLORS_RECEITA = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#06b6d4'];
 const COLORS_DESPESA = ['#ef4444', '#f97316', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981', '#64748b'];
@@ -40,6 +41,16 @@ const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, v
 
 export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, setSelectedMonth, availableMonths }) {
   const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais } = data;
+
+  const [userName, setUserName] = useState('');
+
+  useEffect(() => {
+    account.get().then(u => {
+      if (u && u.name) {
+        setUserName(u.name.split(' ')[0]);
+      }
+    }).catch(e => console.error(e));
+  }, []);
 
   // Evolução financeira mensal
   const evolucaoData = useMemo(() => {
@@ -139,6 +150,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
       {/* Header */}
       <div className="section-header mb-6">
         <div>
+          {userName && <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-muted)', marginBottom: 4 }}>Olá, {userName} 👋</div>}
           <h1 style={{ fontSize: 24, fontWeight: 800, marginBottom: 4 }}>Dashboard Financeiro</h1>
           <p className="text-secondary">Visão completa das suas finanças pessoais</p>
         </div>

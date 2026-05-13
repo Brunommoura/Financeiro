@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, Trash2, Edit2, CreditCard, ChevronDown, ChevronUp, DollarSign, XCircle, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/helpers';
 import { appwriteService } from '../services/appwriteService';
-import { COLLECTIONS } from '../lib/appwrite';
+import { COLLECTIONS, Query } from '../lib/appwrite';
 
 export default function Parcelamentos({ parcelamentos, setParcelamentos, despesas, setDespesas, cartoes, categories, user }) {
   const [showForm, setShowForm] = useState(false);
@@ -17,10 +17,10 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   const handleOpenForm = (parcelamento = null) => {
     if (parcelamento) {
       setEditingId(parcelamento.id);
-      const desc = parcelamento.description || parcelamento.nome || '';
-      const total = parcelamento.totalValue || parcelamento.valorTotal || 0;
-      const count = parcelamento.installmentCount || parcelamento.parcelas || 0;
-      setForm({ ...parcelamento, description: desc, totalValue: total.toString(), installmentCount: count.toString(), cardId: parcelamento.cardId || '' });
+      const desc = parcelamento.descricao || parcelamento.description || parcelamento.nome || '';
+      const total = parcelamento.valorTotal || parcelamento.totalValue || 0;
+      const count = parcelamento.numeroParcelas || parcelamento.installmentCount || parcelamento.parcelas || 0;
+      setForm({ ...parcelamento, description: desc, totalValue: total.toString(), installmentCount: count.toString(), cardId: String(parcelamento.cartaoId || parcelamento.cardId || '') });
     } else {
       setEditingId(null);
       setForm({ description: '', totalValue: '', installmentCount: '', startDate: new Date().toISOString().split('T')[0], cardId: '', category: 'Outros', notes: '' });
@@ -29,10 +29,22 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   };
 
   const handleDeleteMaster = async (id) => {
-    if (window.confirm("Deseja excluir permanentemente este registro de parcelamento? As despesas geradas não serão apagadas automaticamente nesta ação.")) {
+    if (window.confirm("Deseja excluir permanentemente este registro de parcelamento e TODAS as suas despesas vinculadas?")) {
       try {
+        const queryResult = await appwriteService.listar(COLLECTIONS.DESPESAS, user.$id, [
+          Query.equal('parcelamentoId', id)
+        ]);
+        
+        if (queryResult && queryResult.length > 0) {
+          const idsToDelete = queryResult.map(d => d.id);
+          await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, idsToDelete);
+          setDespesas(prev => prev.filter(d => !idsToDelete.includes(d.id)));
+        }
+
         await appwriteService.deletar(COLLECTIONS.PARCELAMENTOS, id);
         setParcelamentos(prev => prev.filter(p => p.id !== id));
+        
+        alert("Parcelamento e despesas vinculadas excluídos com sucesso.");
       } catch (e) {
         alert("Erro ao excluir do banco.");
       }
@@ -70,11 +82,11 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
     try {
       if (editingId) {
         await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, editingId, {
-          description: form.description, category: form.category, notes: form.notes
+          descricao: form.description, categoria: form.category, observacoes: form.notes
         });
-        setParcelamentos(prev => prev.map(p => p.id === editingId ? { ...p, description: form.description, category: form.category, notes: form.notes } : p));
+        setParcelamentos(prev => prev.map(p => p.id === editingId ? { ...p, descricao: form.description, categoria: form.category, observacoes: form.notes } : p));
         
-        const despesasParaAtualizar = despesas.filter(d => d.installmentId === editingId);
+        const despesasParaAtualizar = despesas.filter(d => (d.parcelamentoId || d.installmentId) === editingId);
         const novasDespesas = [];
         
         for (const d of despesasParaAtualizar) {
@@ -97,14 +109,15 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
         const installmentValue = parseFloat((totalValue / installmentCount).toFixed(2));
         
         const masterDoc = {
-          description: form.description,
-          totalValue,
-          installmentCount,
-          installmentValue,
-          startDate: form.startDate,
-          cardId: Number(form.cardId),
-          category: form.category,
-          notes: form.notes,
+          descricao: form.description,
+          valorTotal: totalValue,
+          numeroParcelas: installmentCount,
+          valorParcela: installmentValue,
+          dataPrimeiraParcela: form.startDate,
+          cartaoId: String(form.cardId),
+          categoria: form.category,
+          observacoes: form.notes,
+          parcelasPagas: 0,
           status: 'active'
         };
         
@@ -123,14 +136,14 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
           }
 
           return {
-            installmentId: newMaster.id,
+            parcelamentoId: newMaster.id,
             data: date,
             descricao: `${form.description} - Parcela ${index + 1}/${installmentCount}`,
             categoria: form.category,
             tipo: 'Parcelada',
             valor: val,
-            pagamento: 'Crédito',
-            cartaoId: Number(form.cardId),
+            formaPagamento: 'Crédito',
+            cartaoId: String(form.cardId),
             status: 'Pendente',
             observacoes: form.notes
           };
@@ -154,7 +167,7 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
         await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, parcelamentoId, { status: 'cancelled' });
         setParcelamentos(prev => prev.map(p => p.id === parcelamentoId ? { ...p, status: 'cancelled' } : p));
         
-        const pendentes = despesas.filter(d => d.installmentId === parcelamentoId && d.status === 'Pendente');
+        const pendentes = despesas.filter(d => (d.parcelamentoId || d.installmentId) === parcelamentoId && d.status === 'Pendente');
         if (pendentes.length > 0) {
           const ids = pendentes.map(d => d.id);
           await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, ids);
@@ -167,7 +180,7 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   };
 
   const handleQuitar = async (parcelamento) => {
-    const pendentes = despesas.filter(d => d.installmentId === parcelamento.id && d.status === 'Pendente');
+    const pendentes = despesas.filter(d => (d.parcelamentoId || d.installmentId) === parcelamento.id && d.status === 'Pendente');
     const valorRestante = pendentes.reduce((s, d) => s + d.valor, 0);
     
     if (pendentes.length === 0) {
@@ -183,14 +196,14 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
         await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, idsToDelete);
         
         const quitacaoDoc = {
-          installmentId: parcelamento.id,
+          parcelamentoId: parcelamento.id,
           data: new Date().toISOString().split('T')[0],
-          descricao: `${parcelamento.description} - Quitação Antecipada`,
-          categoria: parcelamento.category,
+          descricao: `${parcelamento.descricao || parcelamento.description} - Quitação Antecipada`,
+          categoria: parcelamento.categoria || parcelamento.category,
           tipo: 'Parcelada',
           valor: parseFloat(valorQuitacao),
-          pagamento: 'Crédito',
-          cartaoId: parcelamento.cardId,
+          formaPagamento: 'Crédito',
+          cartaoId: parcelamento.cartaoId || parcelamento.cardId,
           status: 'Pago',
           observacoes: 'Quitação antecipada'
         };
@@ -216,15 +229,15 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   };
 
   // Calcular métricas ativas do Dashboard
-  const ativos = parcelamentos.filter(p => p.status === 'active' || (p.status !== 'cancelled' && p.status !== 'completed' && despesas.some(d => d.installmentId === p.id && d.status === 'Pendente')));
-  const concluidos = parcelamentos.filter(p => p.status === 'completed' || (p.status !== 'cancelled' && despesas.filter(d => d.installmentId === p.id).length > 0 && despesas.filter(d => d.installmentId === p.id && d.status === 'Pendente').length === 0));
+  const ativos = parcelamentos.filter(p => p.status === 'active' || (p.status !== 'cancelled' && p.status !== 'completed' && despesas.some(d => (d.parcelamentoId || d.installmentId) === p.id && d.status === 'Pendente')));
+  const concluidos = parcelamentos.filter(p => p.status === 'completed' || (p.status !== 'cancelled' && despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id).length > 0 && despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id && d.status === 'Pendente').length === 0));
   const totalParcelamentos = parcelamentos.length;
   
   const pctConcluidos = totalParcelamentos > 0 ? (concluidos.length / totalParcelamentos) * 100 : 0;
   const pctAbertos = totalParcelamentos > 0 ? (ativos.length / totalParcelamentos) * 100 : 0;
 
   const totalValueActive = ativos.reduce((s, p) => {
-    const pendentes = despesas.filter(d => d.installmentId === p.id && d.status === 'Pendente');
+    const pendentes = despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id && d.status === 'Pendente');
     return s + pendentes.reduce((s2, d) => s2 + d.valor, 0);
   }, 0);
 
@@ -321,8 +334,8 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {parcelamentos.map(p => {
-          const cartao = cartoes.find(c => c.id === p.cardId);
-          const filhas = despesas.filter(d => d.installmentId === p.id).sort((a,b) => new Date(a.data) - new Date(b.data));
+          const cartao = cartoes.find(c => String(c.id) === String(p.cartaoId || p.cardId));
+          const filhas = despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id).sort((a,b) => new Date(a.data) - new Date(b.data));
           
           const parcelasPagas = filhas.filter(d => d.status === 'Pago').length;
           const totalPago = filhas.filter(d => d.status === 'Pago').reduce((s, d) => s + d.valor, 0);
@@ -334,10 +347,10 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
           const statusVisual = p.status === 'cancelled' ? 'Cancelado' : isCompleted ? 'Concluído' : 'Ativo';
           const statusColor = p.status === 'cancelled' ? 'var(--accent-red)' : isCompleted ? 'var(--accent-blue)' : 'var(--accent-green)';
           
-          const totalEsperado = p.totalValue || p.valorTotal || 0;
+          const totalEsperado = p.valorTotal || p.totalValue || 0;
           const pct = Math.min(100, totalEsperado > 0 ? (totalPago / totalEsperado) * 100 : 0);
           
-          const nomeParcelamento = p.description || p.nome || 'Parcelamento';
+          const nomeParcelamento = p.descricao || p.description || p.nome || 'Parcelamento';
 
           return (
             <div key={p.id} className="card" style={{ borderLeft: `4px solid ${statusColor}`, opacity: p.status === 'cancelled' ? 0.6 : 1 }}>
@@ -352,7 +365,7 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
                       <span className="badge" style={{ background: `${statusColor}20`, color: statusColor, fontSize: 10 }}>{statusVisual}</span>
                     </div>
                     <div className="text-muted text-xs mt-1">
-                      {cartao?.name || 'Cartão'} · Início em {formatDate(p.startDate || p.dataPrimeiraParcela)}
+                      {cartao?.name || 'Cartão'} · Início em {formatDate(p.dataPrimeiraParcela || p.startDate)}
                     </div>
                   </div>
                 </div>
@@ -386,7 +399,7 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
                   <div className="text-xs text-muted">Valor Original</div>
                 </div>
                 <div style={{ textAlign: 'center', padding: 10, background: 'var(--bg-secondary)', borderRadius: 8 }}>
-                  <div style={{ fontWeight: 700, color: 'var(--accent-green)' }}>{filhas.length > 0 ? parcelasPagas : (p.parcelasPagas || 0)} / {p.installmentCount || p.parcelas || 0}</div>
+                  <div style={{ fontWeight: 700, color: 'var(--accent-green)' }}>{filhas.length > 0 ? parcelasPagas : (p.parcelasPagas || 0)} / {p.numeroParcelas || p.installmentCount || p.parcelas || 0}</div>
                   <div className="text-xs text-muted">Parcelas Pagas</div>
                 </div>
                 <div style={{ textAlign: 'center', padding: 10, background: 'var(--bg-secondary)', borderRadius: 8 }}>

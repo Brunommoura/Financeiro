@@ -8,7 +8,7 @@ export const appwriteService = {
     // Add userId to document
     const documento = { ...dados, userId, createdAt: new Date().toISOString() };
     
-    return await databases.createDocument(
+    const doc = await databases.createDocument(
       DATABASE_ID,
       collectionId,
       ID.unique(),
@@ -19,6 +19,8 @@ export const appwriteService = {
         Permission.delete(Role.user(userId))
       ]
     );
+    doc.id = doc.$id;
+    return doc;
   },
 
   // Batch create

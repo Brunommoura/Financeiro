@@ -26,7 +26,9 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     descricao: '', categoria: categories.expense[0]?.name || '', 
     tipo: 'Fixa', valor: '', pagamento: 'Débito', 
     cartaoId: '', status: 'Pendente', observacoes: '',
-    repetirAuto: true
+    repetirAuto: false,
+    tipoRecorrencia: 'indefinidamente', // 'data' ou 'indefinidamente'
+    dataFimRecorrencia: ''
   });
 
   const [catForm, setCatForm] = useState({ name: '', color: '#EF4444' });
@@ -42,7 +44,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     if (filtTipo && d.tipo !== filtTipo) return false;
     if (filtStatus && d.status !== filtStatus) return false;
     if (filtMes && getMonthKey(d.data) !== filtMes) return false;
-    if (filtCartao && d.cartaoId !== Number(filtCartao)) return false;
+    if (filtCartao && String(d.cartaoId) !== String(filtCartao)) return false;
     if (search && !d.descricao.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   }), [despesas, filtCat, filtTipo, filtStatus, filtMes, filtCartao, search]);
@@ -51,20 +53,21 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
 
   const handleOpenForm = (despesa = null) => {
     if (despesa) {
-      if (despesa.installmentId) {
+      if (despesa.parcelamentoId || despesa.installmentId) {
         if (!window.confirm("Esta despesa faz parte de um parcelamento. Deseja editar apenas esta parcela? (Avisos de alteração geral devem ser feitos na aba Parcelamentos)")) {
           return;
         }
       }
       setEditingId(despesa.id);
-      setForm({ ...despesa, valor: despesa.valor.toString(), cartaoId: despesa.cartaoId || '', repetirAuto: false });
+      setForm({ ...despesa, valor: despesa.valor.toString(), cartaoId: despesa.cartaoId || '', repetirAuto: false, pagamento: despesa.formaPagamento || despesa.pagamento || 'Débito', tipoRecorrencia: 'indefinidamente', dataFimRecorrencia: '' });
     } else {
       setEditingId(null);
       setForm({ 
         data: new Date().toISOString().split('T')[0],
         descricao: '', categoria: categories.expense[0]?.name || '', 
         tipo: 'Fixa', valor: '', pagamento: 'Débito', 
-        cartaoId: '', status: 'Pendente', observacoes: '', repetirAuto: true
+        cartaoId: '', status: 'Pendente', observacoes: '', repetirAuto: false,
+        tipoRecorrencia: 'indefinidamente', dataFimRecorrencia: ''
       });
     }
     setShowForm(true);
@@ -79,7 +82,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
 
     setIsSaving(true);
     const valor = parseFloat(form.valor);
-    const cartaoId = form.pagamento === 'Crédito' ? Number(form.cartaoId) : null;
+    const cartaoId = form.pagamento === 'Crédito' ? String(form.cartaoId) : null;
     
     const baseDoc = {
       data: form.data,
@@ -87,11 +90,11 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
       categoria: form.categoria,
       tipo: form.tipo,
       valor,
-      pagamento: form.pagamento,
-      cartaoId,
+      formaPagamento: form.pagamento,
       status: form.status,
       observacoes: form.observacoes
     };
+    if (cartaoId) baseDoc.cartaoId = cartaoId;
 
     try {
       if (editingId) {
@@ -101,8 +104,20 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
         if (form.tipo === 'Fixa' && form.repetirAuto) {
           const recurrenceId = `rec_${Date.now()}`;
           const startDate = new Date(form.data);
-          const endDate = new Date(startDate.getFullYear(), 11, 31); // 31/12 do ano atual
+          let endDate;
           
+          if (form.tipoRecorrencia === 'data' && form.dataFimRecorrencia) {
+            endDate = new Date(form.dataFimRecorrencia);
+          } else {
+            endDate = new Date(startDate.getFullYear(), 11, 31); // 31/12 do ano atual
+          }
+
+          if (endDate < startDate) {
+            alert("A data final não pode ser menor que a data inicial.");
+            setIsSaving(false);
+            return;
+          }
+
           const documentsToCreate = [];
           let current = new Date(startDate);
           
@@ -117,6 +132,10 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
           
           const savedDocs = await appwriteService.criarVarios(COLLECTIONS.DESPESAS, user.$id, documentsToCreate);
           setDespesas(prev => [...prev, ...savedDocs]);
+          
+          if (form.tipoRecorrencia === 'indefinidamente') {
+            alert(`✅ Despesas geradas automaticamente até 31/12/${startDate.getFullYear()}. Lembre-se de registrar novamente no início do próximo ano.`);
+          }
         } else {
           const newDoc = await appwriteService.criar(COLLECTIONS.DESPESAS, user.$id, baseDoc);
           setDespesas(prev => [...prev, newDoc]);
@@ -133,7 +152,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
   const handleDelete = async (despesa) => {
     let toDeleteIds = [despesa.id];
 
-    if (despesa.installmentId) {
+    if (despesa.parcelamentoId || despesa.installmentId) {
       if (!window.confirm("Esta despesa faz parte de um parcelamento. Excluir apenas esta parcela?")) return;
     } else if (despesa.recurrenceId) {
       const confirmAction = window.prompt("Esta despesa é recorrente.\nDigite '1' para excluir apenas esta.\nDigite '2' para excluir TODAS as futuras.\nDigite '3' para excluir TODAS.", "1");
@@ -167,11 +186,11 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
         categoria: despesa.categoria,
         tipo: despesa.tipo,
         valor: despesa.valor,
-        pagamento: despesa.pagamento,
-        cartaoId: despesa.cartaoId,
+        formaPagamento: despesa.formaPagamento || despesa.pagamento,
         status: despesa.status,
         observacoes: despesa.observacoes
       };
+      if (despesa.cartaoId) duplicated.cartaoId = despesa.cartaoId;
       const newDoc = await appwriteService.criar(COLLECTIONS.DESPESAS, user.$id, duplicated);
       setDespesas(prev => [...prev, newDoc]);
     } catch (e) {
@@ -357,13 +376,29 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
             
             {form.tipo === 'Fixa' && !editingId && (
               <div className="form-group" style={{ gridColumn: '1 / -1', background: 'var(--bg-secondary)', padding: 16, borderRadius: 12, marginTop: 8 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                <label className="label mb-3">Opções de Recorrência Automática:</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14, marginBottom: form.repetirAuto ? 16 : 0 }}>
                   <input type="checkbox" checked={form.repetirAuto} onChange={e => setForm({...form, repetirAuto: e.target.checked})} style={{ width: 16, height: 16 }} />
-                  <span>☑️ Repetir automaticamente todos os meses deste ano</span>
+                  <span>☑️ Tornar despesa recorrente</span>
                 </label>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 24, marginTop: 4 }}>
-                  💡 Esta despesa será cadastrada automaticamente todos os meses até dezembro/{new Date(form.data || new Date()).getFullYear()}
-                </div>
+                
+                {form.repetirAuto && (
+                  <div style={{ display: 'flex', gap: 24, flexDirection: 'column' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                      <input type="radio" name="recTypeExp" checked={form.tipoRecorrencia === 'indefinidamente'} onChange={() => setForm({...form, tipoRecorrencia: 'indefinidamente'})} />
+                      <span>♾️ Indefinidamente <span style={{fontSize: 12, color: 'var(--text-muted)'}}>(Gera despesas mensais até 31/12 do ano atual)</span></span>
+                    </label>
+                    
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                      <input type="radio" name="recTypeExp" checked={form.tipoRecorrencia === 'data'} onChange={() => setForm({...form, tipoRecorrencia: 'data'})} />
+                      <span>⏰ Até qual data:</span>
+                    </label>
+                    
+                    {form.tipoRecorrencia === 'data' && (
+                      <input type="date" className="input" style={{ width: 200, marginLeft: 28 }} value={form.dataFimRecorrencia} onChange={e => setForm({...form, dataFimRecorrencia: e.target.value})} />
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -431,7 +466,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
                 <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>Nenhum registro encontrado</td></tr>
               )}
               {filtered.map(d => {
-                const cartao = d.cartaoId ? cartoes.find(c => c.id === d.cartaoId) : null;
+                const cartao = d.cartaoId ? cartoes.find(c => String(c.id) === String(d.cartaoId)) : null;
                 const color = getCategoryColor(d.categoria);
                 
                 return (
@@ -439,7 +474,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
                     <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(d.data)}</td>
                     <td style={{ fontWeight: 500 }}>
                       {d.descricao}
-                      {d.installmentId && <div className="text-xs text-muted">🔄 Parcela vinculada</div>}
+                      {(d.parcelamentoId || d.installmentId) && <div className="text-xs text-muted">🔄 Parcela vinculada</div>}
                     </td>
                     <td>
                       <span className="badge" style={{ background: `${color}15`, color: color, border: `1px solid ${color}30` }}>
@@ -449,7 +484,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
                     <td><span className={`badge ${tipoBadge[d.tipo] || 'badge-gray'}`}>{d.tipo}</span></td>
                     <td>
                       <div className="flex items-center gap-1">
-                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{d.pagamento}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{d.formaPagamento || d.pagamento}</span>
                         {cartao && (
                           <span className="badge" style={{ padding: '2px 6px', fontSize: 10, background: `${cartao.color}20`, color: cartao.color }}>
                             <CreditCard size={10} style={{ marginRight: 2, display: 'inline' }}/> {cartao.name}
