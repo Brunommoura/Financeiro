@@ -1,15 +1,18 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Edit2, Copy, Search, Settings, CreditCard } from 'lucide-react';
+import { Plus, Trash2, Edit2, Copy, Search, Settings, CreditCard, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthKey } from '../utils/helpers';
+import { appwriteService } from '../services/appwriteService';
+import { COLLECTIONS } from '../lib/appwrite';
 
 const TIPOS = ['Fixa', 'Variável', 'Parcelada'];
 const PAGAMENTOS = ['Débito', 'Crédito', 'PIX', 'Dinheiro', 'Boleto'];
 const STATUS = ['Pago', 'Pendente'];
 
-export default function Despesas({ despesas, setDespesas, categories, setCategories, cartoes }) {
+export default function Despesas({ despesas, setDespesas, categories, setCategories, cartoes, user }) {
   const [showForm, setShowForm] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [search, setSearch] = useState('');
   const [filtCat, setFiltCat] = useState('');
@@ -22,7 +25,8 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     data: new Date().toISOString().split('T')[0],
     descricao: '', categoria: categories.expense[0]?.name || '', 
     tipo: 'Fixa', valor: '', pagamento: 'Débito', 
-    cartaoId: '', status: 'Pendente', observacoes: ''
+    cartaoId: '', status: 'Pendente', observacoes: '',
+    repetirAuto: true
   });
 
   const [catForm, setCatForm] = useState({ name: '', color: '#EF4444' });
@@ -53,59 +57,139 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
         }
       }
       setEditingId(despesa.id);
-      setForm({ ...despesa, valor: despesa.valor.toString(), cartaoId: despesa.cartaoId || '' });
+      setForm({ ...despesa, valor: despesa.valor.toString(), cartaoId: despesa.cartaoId || '', repetirAuto: false });
     } else {
       setEditingId(null);
       setForm({ 
         data: new Date().toISOString().split('T')[0],
         descricao: '', categoria: categories.expense[0]?.name || '', 
         tipo: 'Fixa', valor: '', pagamento: 'Débito', 
-        cartaoId: '', status: 'Pendente', observacoes: ''
+        cartaoId: '', status: 'Pendente', observacoes: '', repetirAuto: true
       });
     }
     setShowForm(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.descricao || !form.valor || !form.data) return;
     if (form.pagamento === 'Crédito' && !form.cartaoId) {
       alert("Por favor, selecione um cartão de crédito.");
       return;
     }
 
+    setIsSaving(true);
     const valor = parseFloat(form.valor);
     const cartaoId = form.pagamento === 'Crédito' ? Number(form.cartaoId) : null;
     
-    if (editingId) {
-      setDespesas(prev => prev.map(d => d.id === editingId ? { ...form, id: d.id, valor, cartaoId, installmentId: d.installmentId } : d));
-    } else {
-      setDespesas(prev => [...prev, { ...form, id: Date.now(), valor, cartaoId }]);
+    const baseDoc = {
+      data: form.data,
+      descricao: form.descricao,
+      categoria: form.categoria,
+      tipo: form.tipo,
+      valor,
+      pagamento: form.pagamento,
+      cartaoId,
+      status: form.status,
+      observacoes: form.observacoes
+    };
+
+    try {
+      if (editingId) {
+        await appwriteService.atualizar(COLLECTIONS.DESPESAS, editingId, baseDoc);
+        setDespesas(prev => prev.map(d => d.id === editingId ? { ...d, ...baseDoc } : d));
+      } else {
+        if (form.tipo === 'Fixa' && form.repetirAuto) {
+          const recurrenceId = `rec_${Date.now()}`;
+          const startDate = new Date(form.data);
+          const endDate = new Date(startDate.getFullYear(), 11, 31); // 31/12 do ano atual
+          
+          const documentsToCreate = [];
+          let current = new Date(startDate);
+          
+          while (current <= endDate) {
+            documentsToCreate.push({
+              ...baseDoc,
+              data: current.toISOString().split('T')[0],
+              recurrenceId
+            });
+            current.setMonth(current.getMonth() + 1);
+          }
+          
+          const savedDocs = await appwriteService.criarVarios(COLLECTIONS.DESPESAS, user.$id, documentsToCreate);
+          setDespesas(prev => [...prev, ...savedDocs]);
+        } else {
+          const newDoc = await appwriteService.criar(COLLECTIONS.DESPESAS, user.$id, baseDoc);
+          setDespesas(prev => [...prev, newDoc]);
+        }
+      }
+      setShowForm(false);
+    } catch (e) {
+      alert("Erro ao salvar despesa.");
+    } finally {
+      setIsSaving(false);
     }
-    setShowForm(false);
   };
 
-  const handleDelete = (despesa) => {
+  const handleDelete = async (despesa) => {
+    let toDeleteIds = [despesa.id];
+
     if (despesa.installmentId) {
       if (!window.confirm("Esta despesa faz parte de um parcelamento. Excluir apenas esta parcela?")) return;
+    } else if (despesa.recurrenceId) {
+      const confirmAction = window.prompt("Esta despesa é recorrente.\nDigite '1' para excluir apenas esta.\nDigite '2' para excluir TODAS as futuras.\nDigite '3' para excluir TODAS.", "1");
+      
+      if (confirmAction === '2') {
+        const futureDocs = despesas.filter(d => d.recurrenceId === despesa.recurrenceId && d.data >= despesa.data);
+        toDeleteIds = futureDocs.map(d => d.id);
+      } else if (confirmAction === '3') {
+        const allDocs = despesas.filter(d => d.recurrenceId === despesa.recurrenceId);
+        toDeleteIds = allDocs.map(d => d.id);
+      } else if (confirmAction !== '1') {
+        return; // cancelado
+      }
     } else {
       if (!window.confirm("Deseja realmente excluir esta despesa?")) return;
     }
-    setDespesas(prev => prev.filter(d => d.id !== despesa.id));
+
+    try {
+      await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, toDeleteIds);
+      setDespesas(prev => prev.filter(d => !toDeleteIds.includes(d.id)));
+    } catch (e) {
+      alert("Erro ao excluir do banco de dados.");
+    }
   };
 
-  const handleDuplicate = (despesa) => {
-    const duplicated = { 
-      ...despesa, 
-      id: Date.now(), 
-      data: new Date().toISOString().split('T')[0],
-      descricao: `${despesa.descricao} (Cópia)`,
-      installmentId: undefined // remover vínculo se for duplicado
-    };
-    setDespesas(prev => [...prev, duplicated]);
+  const handleDuplicate = async (despesa) => {
+    try {
+      const duplicated = { 
+        data: new Date().toISOString().split('T')[0],
+        descricao: `${despesa.descricao} (Cópia)`,
+        categoria: despesa.categoria,
+        tipo: despesa.tipo,
+        valor: despesa.valor,
+        pagamento: despesa.pagamento,
+        cartaoId: despesa.cartaoId,
+        status: despesa.status,
+        observacoes: despesa.observacoes
+      };
+      const newDoc = await appwriteService.criar(COLLECTIONS.DESPESAS, user.$id, duplicated);
+      setDespesas(prev => [...prev, newDoc]);
+    } catch (e) {
+      alert("Erro ao duplicar despesa.");
+    }
   };
 
-  const toggleStatus = (id) => {
-    setDespesas(prev => prev.map(d => d.id === id ? { ...d, status: d.status === 'Pago' ? 'Pendente' : 'Pago' } : d));
+  const toggleStatus = async (id) => {
+    const despesa = despesas.find(d => d.id === id);
+    if (!despesa) return;
+    
+    const newStatus = despesa.status === 'Pago' ? 'Pendente' : 'Pago';
+    try {
+      await appwriteService.atualizar(COLLECTIONS.DESPESAS, id, { status: newStatus });
+      setDespesas(prev => prev.map(d => d.id === id ? { ...d, status: newStatus } : d));
+    } catch (e) {
+      alert("Erro ao atualizar status.");
+    }
   };
 
   const tipoBadge = { 'Fixa': 'badge-blue', 'Variável': 'badge-yellow', 'Parcelada': 'badge-purple' };
@@ -270,10 +354,24 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
               <label className="label">Observações</label>
               <input className="input" placeholder="Opcional" value={form.observacoes} onChange={e => setForm({ ...form, observacoes: e.target.value })} />
             </div>
+            
+            {form.tipo === 'Fixa' && !editingId && (
+              <div className="form-group" style={{ gridColumn: '1 / -1', background: 'var(--bg-secondary)', padding: 16, borderRadius: 12, marginTop: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                  <input type="checkbox" checked={form.repetirAuto} onChange={e => setForm({...form, repetirAuto: e.target.checked})} style={{ width: 16, height: 16 }} />
+                  <span>☑️ Repetir automaticamente todos os meses deste ano</span>
+                </label>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 24, marginTop: 4 }}>
+                  💡 Esta despesa será cadastrada automaticamente todos os meses até dezembro/{new Date(form.data || new Date()).getFullYear()}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex gap-2 mt-4">
-            <button className="btn btn-danger" onClick={handleSave}>{editingId ? 'Salvar Alterações' : 'Salvar'}</button>
-            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+            <button className="btn btn-danger" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? <Loader2 size={16} className="spin" /> : (editingId ? 'Salvar Alterações' : 'Salvar')}
+            </button>
+            <button className="btn btn-ghost" onClick={() => setShowForm(false)} disabled={isSaving}>Cancelar</button>
           </div>
         </div>
       )}

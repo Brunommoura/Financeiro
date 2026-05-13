@@ -9,46 +9,88 @@ import Patrimonio from './components/Patrimonio';
 import Dividas from './components/Dividas';
 import Metas from './components/Metas';
 import Produtividade from './components/Produtividade';
+import Feedback from './components/Feedback';
 import { sampleData } from './data/sampleData';
 import { calcFinancialScore, getAvailableMonths } from './utils/helpers';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import LoginPage from './components/Auth/LoginPage';
+import { appwriteService } from './services/appwriteService';
+import { COLLECTIONS } from './lib/appwrite';
 
+function AppContent() {
+  const { user, loading, logout } = useAuth();
 
+  if (loading) {
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Carregando sessão...</div>;
+  }
 
-const STORAGE_KEY = 'financepro_data_v1';
+  if (!user) {
+    return <LoginPage />;
+  }
 
-const loadData = () => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch { }
-  return sampleData;
-};
+  return <FinanceApp user={user} logout={logout} />;
+}
 
-const saveData = (data) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch { }
-};
-
-export default function App() {
+function FinanceApp({ user, logout }) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [theme, setTheme] = useState(() => localStorage.getItem('financepro_theme') || 'dark');
   const [viewMode, setViewMode] = useState('geral');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [appLoading, setAppLoading] = useState(true);
 
-  const [categories, setCategories] = useState(() => loadData().categories || sampleData.categories);
-  const [cartoes, setCartoes] = useState(() => loadData().cartoes || sampleData.cartoes);
-  const [receitas, setReceitas] = useState(() => loadData().receitas);
-  const [despesas, setDespesas] = useState(() => loadData().despesas);
-  const [parcelamentos, setParcelamentos] = useState(() => loadData().parcelamentos);
-  const [patrimonio, setPatrimonio] = useState(() => loadData().patrimonio);
-  const [dividasList, setDividasList] = useState(() => loadData().dividasList);
-  const [metas, setMetas] = useState(() => loadData().metas);
-  const [tarefas, setTarefas] = useState(() => loadData().tarefas);
-  const [habitos, setHabitos] = useState(() => loadData().habitos);
-  const [patrimonioHistorico] = useState(() => loadData().patrimonioHistorico);
-  const [aproveitamentoMensal, setAproveitamentoMensal] = useState(() => loadData().aproveitamentoMensal || sampleData.aproveitamentoMensal);
-  const [receitasDespesasMensais] = useState(() => loadData().receitasDespesasMensais || sampleData.receitasDespesasMensais);
+  // States
+  const [categories, setCategories] = useState(sampleData.categories);
+  const [cartoes, setCartoes] = useState(sampleData.cartoes);
+  const [receitas, setReceitas] = useState([]);
+  const [despesas, setDespesas] = useState([]);
+  const [parcelamentos, setParcelamentos] = useState([]);
+  const [patrimonio, setPatrimonio] = useState(sampleData.patrimonio);
+  const [dividasList, setDividasList] = useState(sampleData.dividasList);
+  const [metas, setMetas] = useState(sampleData.metas);
+  const [tarefas, setTarefas] = useState(sampleData.tarefas);
+  const [habitos, setHabitos] = useState(sampleData.habitos);
+  const [patrimonioHistorico] = useState(sampleData.patrimonioHistorico);
+  const [aproveitamentoMensal, setAproveitamentoMensal] = useState(sampleData.aproveitamentoMensal);
+  const [receitasDespesasMensais] = useState(sampleData.receitasDespesasMensais);
+
+  const STORAGE_KEY = `financepro_local_${user.$id}`;
+
+  useEffect(() => {
+    const carregarDados = async () => {
+      setAppLoading(true);
+      try {
+        // Carregar dados locais (temporário para coleções não migradas 100%)
+        const localData = localStorage.getItem(STORAGE_KEY);
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          if (parsed.categories) setCategories(parsed.categories);
+          if (parsed.cartoes) setCartoes(parsed.cartoes);
+          if (parsed.patrimonio) setPatrimonio(parsed.patrimonio);
+          if (parsed.dividasList) setDividasList(parsed.dividasList);
+          if (parsed.metas) setMetas(parsed.metas);
+          if (parsed.tarefas) setTarefas(parsed.tarefas);
+          if (parsed.habitos) setHabitos(parsed.habitos);
+        }
+
+        // Carregar do Appwrite
+        const [rec, desp, parc] = await Promise.all([
+          appwriteService.listar(COLLECTIONS.RECEITAS, user.$id),
+          appwriteService.listar(COLLECTIONS.DESPESAS, user.$id),
+          appwriteService.listar(COLLECTIONS.PARCELAMENTOS, user.$id)
+        ]);
+
+        setReceitas(rec);
+        setDespesas(desp);
+        setParcelamentos(parc);
+      } catch (error) {
+        console.error("Erro ao carregar dados do Appwrite:", error);
+      } finally {
+        setAppLoading(false);
+      }
+    };
+
+    carregarDados();
+  }, [user.$id]);
 
   // Apply theme
   useEffect(() => {
@@ -56,10 +98,14 @@ export default function App() {
     localStorage.setItem('financepro_theme', theme);
   }, [theme]);
 
-  // Persist data on every change
+  // Persist non-Appwrite data locally
   useEffect(() => {
-    saveData({ categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais });
-  }, [categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
+    if (!appLoading) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        categories, cartoes, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
+      }));
+    }
+  }, [categories, cartoes, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais, appLoading, STORAGE_KEY]);
 
   // Available months
   const availableMonths = useMemo(() => getAvailableMonths(receitas, despesas), [receitas, despesas]);
@@ -84,35 +130,22 @@ export default function App() {
     categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
   }), [categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
 
-  // Reset to sample data
-  const handleReset = () => {
-    if (window.confirm('Tem certeza que deseja resetar todos os dados para os valores de exemplo? Esta ação não pode ser desfeita.')) {
-      setCategories(sampleData.categories);
-      setCartoes(sampleData.cartoes);
-      setReceitas(sampleData.receitas);
-      setDespesas(sampleData.despesas);
-      setParcelamentos(sampleData.parcelamentos);
-      setPatrimonio(sampleData.patrimonio);
-      setDividasList(sampleData.dividasList);
-      setMetas(sampleData.metas);
-      setTarefas(sampleData.tarefas);
-      setHabitos(sampleData.habitos);
-      setAproveitamentoMensal(sampleData.aproveitamentoMensal);
-    }
-  };
+  if (appLoading) {
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Sincronizando com Appwrite...</div>;
+  }
 
   const renderTab = () => {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard data={data} viewMode={viewMode} setViewMode={setViewMode} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} availableMonths={availableMonths} />;
       case 'receitas':
-        return <Receitas receitas={receitas} setReceitas={setReceitas} categories={categories} setCategories={setCategories} />;
+        return <Receitas receitas={receitas} setReceitas={setReceitas} categories={categories} setCategories={setCategories} user={user} />;
       case 'despesas':
-        return <Despesas despesas={despesas} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} />;
+        return <Despesas despesas={despesas} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} user={user} />;
       case 'cartoes':
         return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesas} />;
       case 'parcelamentos':
-        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesas} setDespesas={setDespesas} cartoes={cartoes} categories={categories} />;
+        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesas} setDespesas={setDespesas} cartoes={cartoes} categories={categories} user={user} />;
       case 'patrimonio':
         return <Patrimonio patrimonio={patrimonio} setPatrimonio={setPatrimonio} />;
       case 'dividas':
@@ -121,6 +154,8 @@ export default function App() {
         return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} />;
       case 'produtividade':
         return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} />;
+      case 'feedback':
+        return <Feedback user={user} />;
       default:
         return null;
     }
@@ -138,16 +173,23 @@ export default function App() {
       <main className="main-content">
         {renderTab()}
 
-        {/* Footer com botão reset */}
         <div style={{ marginTop: 48, paddingTop: 16, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            💾 Dados salvos automaticamente · FinancePro v1.0
+            ☁️ Sincronizado na Nuvem (Appwrite) · Logado como {user?.email}
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={handleReset} style={{ color: 'var(--text-muted)' }}>
-            🔄 Resetar dados
+          <button className="btn btn-ghost btn-sm" onClick={() => { if (window.confirm('Deseja sair?')) logout(); }} style={{ color: 'var(--accent-red)' }}>
+            Sair da Conta
           </button>
         </div>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

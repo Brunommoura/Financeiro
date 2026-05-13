@@ -15,6 +15,7 @@ const navItems = [
   { id: 'dividas', label: 'Dívidas', icon: Shield, section: 'Patrimônio' },
   { id: 'metas', label: 'Metas', icon: Target, section: 'Planejamento' },
   { id: 'produtividade', label: 'Produtividade', icon: CheckSquare, section: 'Planejamento' },
+  { id: 'feedback', label: 'Feedback', icon: CheckSquare, section: 'Sistema' },
 ];
 
 export default function Sidebar({ activeTab, setActiveTab, theme, toggleTheme, score }) {

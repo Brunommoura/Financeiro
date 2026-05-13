@@ -1,11 +1,14 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Edit2, CreditCard, ChevronDown, ChevronUp, DollarSign, XCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, CreditCard, ChevronDown, ChevronUp, DollarSign, XCircle, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/helpers';
+import { appwriteService } from '../services/appwriteService';
+import { COLLECTIONS } from '../lib/appwrite';
 
-export default function Parcelamentos({ parcelamentos, setParcelamentos, despesas, setDespesas, cartoes, categories }) {
+export default function Parcelamentos({ parcelamentos, setParcelamentos, despesas, setDespesas, cartoes, categories, user }) {
   const [showForm, setShowForm] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [form, setForm] = useState({
     description: '', totalValue: '', installmentCount: '', startDate: new Date().toISOString().split('T')[0],
     cardId: '', category: 'Outros', notes: ''
@@ -25,9 +28,14 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
     setShowForm(true);
   };
 
-  const handleDeleteMaster = (id) => {
+  const handleDeleteMaster = async (id) => {
     if (window.confirm("Deseja excluir permanentemente este registro de parcelamento? As despesas geradas não serão apagadas automaticamente nesta ação.")) {
-      setParcelamentos(prev => prev.filter(p => p.id !== id));
+      try {
+        await appwriteService.deletar(COLLECTIONS.PARCELAMENTOS, id);
+        setParcelamentos(prev => prev.filter(p => p.id !== id));
+      } catch (e) {
+        alert("Erro ao excluir do banco.");
+      }
     }
   };
 
@@ -38,7 +46,6 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
     for (let i = 0; i < count; i++) {
       dates.push(current.toISOString().split('T')[0]);
       
-      // Calculate next month maintaining the day, handling edge cases like Jan 31 -> Feb 28
       let nextMonth = current.getUTCMonth() + 1;
       let nextYear = current.getUTCFullYear();
       if (nextMonth > 11) {
@@ -46,89 +53,120 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
         nextYear++;
       }
       current = new Date(Date.UTC(nextYear, nextMonth, day));
-      // if month rolled over too far (e.g., trying to set Feb 31 resulted in Mar 3)
       if (current.getUTCMonth() !== nextMonth) {
-        current = new Date(Date.UTC(nextYear, nextMonth + 1, 0)); // last day of nextMonth
+        current = new Date(Date.UTC(nextYear, nextMonth + 1, 0));
       }
     }
     return dates;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.description || !form.totalValue || !form.installmentCount || !form.cardId) {
       alert("Preencha todos os campos obrigatórios (Descrição, Valor, Parcelas, Cartão).");
       return;
     }
 
-    if (editingId) {
-      // Edição de informações básicas (NÃO recria financeiro)
-      setParcelamentos(prev => prev.map(p => p.id === editingId ? { ...p, description: form.description, category: form.category, notes: form.notes } : p));
-      
-      // Atualizar as despesas filhas (Apenas campos não financeiros)
-      setDespesas(prev => prev.map(d => {
-        if (d.installmentId === editingId) {
-          // Atualiza a descrição base mantendo o final " - Parcela X/Y"
+    setIsSaving(true);
+    try {
+      if (editingId) {
+        await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, editingId, {
+          description: form.description, category: form.category, notes: form.notes
+        });
+        setParcelamentos(prev => prev.map(p => p.id === editingId ? { ...p, description: form.description, category: form.category, notes: form.notes } : p));
+        
+        const despesasParaAtualizar = despesas.filter(d => d.installmentId === editingId);
+        const novasDespesas = [];
+        
+        for (const d of despesasParaAtualizar) {
           const match = d.descricao.match(/(.*) - Parcela (\d+\/\d+)/);
           const newDesc = match ? `${form.description} - Parcela ${match[2]}` : `${form.description} (Atualizada)`;
-          return { ...d, descricao: newDesc, categoria: form.category };
+          
+          await appwriteService.atualizar(COLLECTIONS.DESPESAS, d.id, {
+            descricao: newDesc, categoria: form.category
+          });
+          novasDespesas.push({ ...d, descricao: newDesc, categoria: form.category });
         }
-        return d;
-      }));
-    } else {
-      // Novo parcelamento: Criação do mestre e filhas
-      const totalValue = parseFloat(form.totalValue);
-      const installmentCount = parseInt(form.installmentCount);
-      const installmentValue = parseFloat((totalValue / installmentCount).toFixed(2));
-      const newId = Date.now();
-      
-      const newMaster = {
-        ...form, id: newId, totalValue, installmentCount, installmentValue,
-        cardId: Number(form.cardId), status: 'active'
-      };
-      
-      setParcelamentos(prev => [...prev, newMaster]);
-
-      // Gerar as N despesas
-      const dates = generateInstallmentDates(form.startDate, installmentCount);
-      let cumulativeValue = 0;
-      
-      const newDespesas = dates.map((date, index) => {
-        // Ajuste de centavos na última parcela
-        let val = installmentValue;
-        if (index === installmentCount - 1) {
-          val = parseFloat((totalValue - cumulativeValue).toFixed(2));
-        } else {
-          cumulativeValue += val;
-        }
-
-        return {
-          id: Date.now() + index, // unique ID hack
-          installmentId: newId,
-          data: date,
-          descricao: `${form.description} - Parcela ${index + 1}/${installmentCount}`,
-          categoria: form.category,
-          tipo: 'Parcelada',
-          valor: val,
-          pagamento: 'Crédito',
-          cartaoId: Number(form.cardId),
-          status: 'Pendente',
-          observacoes: form.notes
+        
+        setDespesas(prev => prev.map(d => {
+          const updated = novasDespesas.find(nd => nd.id === d.id);
+          return updated || d;
+        }));
+      } else {
+        const totalValue = parseFloat(form.totalValue);
+        const installmentCount = parseInt(form.installmentCount);
+        const installmentValue = parseFloat((totalValue / installmentCount).toFixed(2));
+        
+        const masterDoc = {
+          description: form.description,
+          totalValue,
+          installmentCount,
+          installmentValue,
+          startDate: form.startDate,
+          cardId: Number(form.cardId),
+          category: form.category,
+          notes: form.notes,
+          status: 'active'
         };
-      });
+        
+        const newMaster = await appwriteService.criar(COLLECTIONS.PARCELAMENTOS, user.$id, masterDoc);
+        setParcelamentos(prev => [...prev, newMaster]);
 
-      setDespesas(prev => [...prev, ...newDespesas]);
+        const dates = generateInstallmentDates(form.startDate, installmentCount);
+        let cumulativeValue = 0;
+        
+        const documentsToCreate = dates.map((date, index) => {
+          let val = installmentValue;
+          if (index === installmentCount - 1) {
+            val = parseFloat((totalValue - cumulativeValue).toFixed(2));
+          } else {
+            cumulativeValue += val;
+          }
+
+          return {
+            installmentId: newMaster.id,
+            data: date,
+            descricao: `${form.description} - Parcela ${index + 1}/${installmentCount}`,
+            categoria: form.category,
+            tipo: 'Parcelada',
+            valor: val,
+            pagamento: 'Crédito',
+            cartaoId: Number(form.cardId),
+            status: 'Pendente',
+            observacoes: form.notes
+          };
+        });
+
+        const newDespesas = await appwriteService.criarVarios(COLLECTIONS.DESPESAS, user.$id, documentsToCreate);
+        setDespesas(prev => [...prev, ...newDespesas]);
+      }
+      setShowForm(false);
+    } catch (e) {
+      alert("Erro ao salvar parcelamento no banco de dados.");
+      console.error(e);
+    } finally {
+      setIsSaving(false);
     }
-    setShowForm(false);
   };
 
-  const handleCancel = (parcelamentoId) => {
+  const handleCancel = async (parcelamentoId) => {
     if (window.confirm("Deseja realmente cancelar este parcelamento? Isso irá excluir todas as parcelas pendentes futuras.")) {
-      setParcelamentos(prev => prev.map(p => p.id === parcelamentoId ? { ...p, status: 'cancelled' } : p));
-      setDespesas(prev => prev.filter(d => !(d.installmentId === parcelamentoId && d.status === 'Pendente')));
+      try {
+        await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, parcelamentoId, { status: 'cancelled' });
+        setParcelamentos(prev => prev.map(p => p.id === parcelamentoId ? { ...p, status: 'cancelled' } : p));
+        
+        const pendentes = despesas.filter(d => d.installmentId === parcelamentoId && d.status === 'Pendente');
+        if (pendentes.length > 0) {
+          const ids = pendentes.map(d => d.id);
+          await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, ids);
+          setDespesas(prev => prev.filter(d => !ids.includes(d.id)));
+        }
+      } catch (e) {
+        alert("Erro ao cancelar parcelamento.");
+      }
     }
   };
 
-  const handleQuitar = (parcelamento) => {
+  const handleQuitar = async (parcelamento) => {
     const pendentes = despesas.filter(d => d.installmentId === parcelamento.id && d.status === 'Pendente');
     const valorRestante = pendentes.reduce((s, d) => s + d.valor, 0);
     
@@ -140,35 +178,52 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
     const valorQuitacao = window.prompt(`Restam ${pendentes.length} parcelas no valor total de ${formatCurrency(valorRestante)}.\n\nSe teve desconto, informe o valor da quitação (R$):`, valorRestante.toString());
     
     if (valorQuitacao !== null && !isNaN(parseFloat(valorQuitacao))) {
-      // Apagar pendentes
-      setDespesas(prev => prev.filter(d => !(d.installmentId === parcelamento.id && d.status === 'Pendente')));
-      
-      // Criar despesa de quitação
-      setDespesas(prev => [...prev, {
-        id: Date.now(),
-        installmentId: parcelamento.id,
-        data: new Date().toISOString().split('T')[0],
-        descricao: `${parcelamento.description} - Quitação Antecipada`,
-        categoria: parcelamento.category,
-        tipo: 'Parcelada',
-        valor: parseFloat(valorQuitacao),
-        pagamento: 'Crédito',
-        cartaoId: parcelamento.cardId,
-        status: 'Pago',
-        observacoes: 'Quitação antecipada'
-      }]);
-
-      setParcelamentos(prev => prev.map(p => p.id === parcelamento.id ? { ...p, status: 'completed' } : p));
+      try {
+        const idsToDelete = pendentes.map(d => d.id);
+        await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, idsToDelete);
+        
+        const quitacaoDoc = {
+          installmentId: parcelamento.id,
+          data: new Date().toISOString().split('T')[0],
+          descricao: `${parcelamento.description} - Quitação Antecipada`,
+          categoria: parcelamento.category,
+          tipo: 'Parcelada',
+          valor: parseFloat(valorQuitacao),
+          pagamento: 'Crédito',
+          cartaoId: parcelamento.cardId,
+          status: 'Pago',
+          observacoes: 'Quitação antecipada'
+        };
+        const quitacaoSalva = await appwriteService.criar(COLLECTIONS.DESPESAS, user.$id, quitacaoDoc);
+        
+        await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, parcelamento.id, { status: 'completed' });
+        
+        setDespesas(prev => [...prev.filter(d => !idsToDelete.includes(d.id)), quitacaoSalva]);
+        setParcelamentos(prev => prev.map(p => p.id === parcelamento.id ? { ...p, status: 'completed' } : p));
+      } catch (e) {
+        alert("Erro ao processar quitação.");
+      }
     }
   };
 
-  const markParcelaAsPaid = (despesaId) => {
-    setDespesas(prev => prev.map(d => d.id === despesaId ? { ...d, status: 'Pago' } : d));
+  const markParcelaAsPaid = async (despesaId) => {
+    try {
+      await appwriteService.atualizar(COLLECTIONS.DESPESAS, despesaId, { status: 'Pago' });
+      setDespesas(prev => prev.map(d => d.id === despesaId ? { ...d, status: 'Pago' } : d));
+    } catch (e) {
+      alert("Erro ao marcar parcela como paga.");
+    }
   };
 
   // Calcular métricas ativas do Dashboard
-  const activeMaster = parcelamentos.filter(p => p.status === 'active');
-  const totalValueActive = activeMaster.reduce((s, p) => {
+  const ativos = parcelamentos.filter(p => p.status === 'active' || (p.status !== 'cancelled' && p.status !== 'completed' && despesas.some(d => d.installmentId === p.id && d.status === 'Pendente')));
+  const concluidos = parcelamentos.filter(p => p.status === 'completed' || (p.status !== 'cancelled' && despesas.filter(d => d.installmentId === p.id).length > 0 && despesas.filter(d => d.installmentId === p.id && d.status === 'Pendente').length === 0));
+  const totalParcelamentos = parcelamentos.length;
+  
+  const pctConcluidos = totalParcelamentos > 0 ? (concluidos.length / totalParcelamentos) * 100 : 0;
+  const pctAbertos = totalParcelamentos > 0 ? (ativos.length / totalParcelamentos) * 100 : 0;
+
+  const totalValueActive = ativos.reduce((s, p) => {
     const pendentes = despesas.filter(d => d.installmentId === p.id && d.status === 'Pendente');
     return s + pendentes.reduce((s2, d) => s2 + d.valor, 0);
   }, 0);
@@ -187,12 +242,24 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
 
       <div className="grid-4 mb-6">
         <div className="card text-center">
-          <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-purple)' }}>{activeMaster.length}</div>
-          <div className="text-muted text-xs">Parcelamentos Ativos</div>
+          <div className="text-muted text-xs mb-1">📊 TOTAL PARCELAMENTOS</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent-blue)' }}>{totalParcelamentos}</div>
+          <div className="text-muted" style={{ fontSize: 11 }}>Todos os registros</div>
         </div>
         <div className="card text-center">
-          <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-red)' }}>{formatCurrency(totalValueActive)}</div>
-          <div className="text-muted text-xs">Total a Pagar (Futuro)</div>
+          <div className="text-muted text-xs mb-1">✅ CONCLUÍDOS</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent-green)' }}>{concluidos.length}</div>
+          <div className="text-muted" style={{ fontSize: 11 }}>{pctConcluidos.toFixed(0)}% pagos</div>
+        </div>
+        <div className="card text-center">
+          <div className="text-muted text-xs mb-1">⏳ EM ABERTO</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent-yellow)' }}>{ativos.length}</div>
+          <div className="text-muted" style={{ fontSize: 11 }}>{pctAbertos.toFixed(0)}% em aberto</div>
+        </div>
+        <div className="card text-center">
+          <div className="text-muted text-xs mb-1">💰 TOTAL A PAGAR</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent-red)' }}>{formatCurrency(totalValueActive)}</div>
+          <div className="text-muted" style={{ fontSize: 11 }}>Soma de todas as parcelas restantes</div>
         </div>
       </div>
 
@@ -244,8 +311,10 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
             </div>
           </div>
           <div className="flex gap-2 mt-4">
-            <button className="btn btn-primary" onClick={handleSave}>{editingId ? 'Salvar Edição' : 'Gerar Parcelas'}</button>
-            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? <Loader2 size={16} className="spin" /> : (editingId ? 'Salvar Edição' : 'Gerar Parcelas')}
+            </button>
+            <button className="btn btn-ghost" onClick={() => setShowForm(false)} disabled={isSaving}>Cancelar</button>
           </div>
         </div>
       )}

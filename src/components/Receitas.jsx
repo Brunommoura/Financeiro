@@ -1,11 +1,14 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Edit2, Copy, Search, Settings } from 'lucide-react';
+import { Plus, Trash2, Edit2, Copy, Search, Settings, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthKey } from '../utils/helpers';
+import { appwriteService } from '../services/appwriteService';
+import { COLLECTIONS } from '../lib/appwrite';
 
-export default function Receitas({ receitas, setReceitas, categories, setCategories }) {
+export default function Receitas({ receitas, setReceitas, categories, setCategories, user }) {
   const [showForm, setShowForm] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
   
   const [search, setSearch] = useState('');
   const [filtCat, setFiltCat] = useState('');
@@ -14,7 +17,9 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
   const [form, setForm] = useState({ 
     data: new Date().toISOString().split('T')[0], 
     descricao: '', categoria: categories.income[0]?.name || '', 
-    valor: '', recorrente: false, observacoes: '' 
+    valor: '', recorrente: false, observacoes: '',
+    tipoRecorrencia: 'indefinidamente', // 'data' ou 'indefinidamente'
+    dataFimRecorrencia: ''
   });
 
   const [catForm, setCatForm] = useState({ name: '', color: '#10B981' });
@@ -37,45 +42,131 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
   const handleOpenForm = (receita = null) => {
     if (receita) {
       setEditingId(receita.id);
-      setForm({ ...receita, valor: receita.valor.toString() });
+      setForm({ ...receita, valor: receita.valor.toString(), tipoRecorrencia: 'indefinidamente', dataFimRecorrencia: '' });
     } else {
       setEditingId(null);
       setForm({ 
         data: new Date().toISOString().split('T')[0], 
         descricao: '', categoria: categories.income[0]?.name || '', 
-        valor: '', recorrente: false, observacoes: '' 
+        valor: '', recorrente: false, observacoes: '',
+        tipoRecorrencia: 'indefinidamente', dataFimRecorrencia: ''
       });
     }
     setShowForm(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.descricao || !form.valor || !form.data) return;
     
+    setIsSaving(true);
     const valor = parseFloat(form.valor);
-    
-    if (editingId) {
-      setReceitas(prev => prev.map(r => r.id === editingId ? { ...form, id: r.id, valor } : r));
-    } else {
-      setReceitas(prev => [...prev, { ...form, id: Date.now(), valor }]);
-    }
-    setShowForm(false);
-  };
-
-  const handleDelete = (id) => {
-    if (window.confirm("Tem certeza que deseja excluir esta receita?")) {
-      setReceitas(prev => prev.filter(r => r.id !== id));
-    }
-  };
-
-  const handleDuplicate = (receita) => {
-    const duplicated = { 
-      ...receita, 
-      id: Date.now(), 
-      data: new Date().toISOString().split('T')[0],
-      descricao: `${receita.descricao} (Cópia)`
+    const baseDoc = {
+      data: form.data,
+      descricao: form.descricao,
+      categoria: form.categoria,
+      valor,
+      recorrente: form.recorrente,
+      observacoes: form.observacoes
     };
-    setReceitas(prev => [...prev, duplicated]);
+
+    try {
+      if (editingId) {
+        await appwriteService.atualizar(COLLECTIONS.RECEITAS, editingId, baseDoc);
+        setReceitas(prev => prev.map(r => r.id === editingId ? { ...r, ...baseDoc } : r));
+      } else {
+        if (form.recorrente) {
+          const recurrenceId = `rec_${Date.now()}`;
+          const startDate = new Date(form.data);
+          let endDate;
+          
+          if (form.tipoRecorrencia === 'data' && form.dataFimRecorrencia) {
+            endDate = new Date(form.dataFimRecorrencia);
+          } else {
+            endDate = new Date(startDate.getFullYear(), 11, 31); // 31/12 do ano atual
+          }
+
+          if (endDate < startDate) {
+            alert("A data final não pode ser menor que a data inicial.");
+            setIsSaving(false);
+            return;
+          }
+
+          const documentsToCreate = [];
+          let current = new Date(startDate);
+          
+          while (current <= endDate) {
+            documentsToCreate.push({
+              ...baseDoc,
+              data: current.toISOString().split('T')[0],
+              recurrenceId
+            });
+            // Adicionar 1 mês
+            current.setMonth(current.getMonth() + 1);
+          }
+          
+          // O ideal é usar createDocuments em batch se houver, ou Promise.all
+          const savedDocs = await appwriteService.criarVarios(COLLECTIONS.RECEITAS, user.$id, documentsToCreate);
+          setReceitas(prev => [...prev, ...savedDocs]);
+          
+          if (form.tipoRecorrencia === 'indefinidamente') {
+            alert(`✅ Receitas geradas automaticamente até 31/12/${startDate.getFullYear()}. Lembre-se de registrar novamente no início do próximo ano.`);
+          }
+        } else {
+          const newDoc = await appwriteService.criar(COLLECTIONS.RECEITAS, user.$id, baseDoc);
+          setReceitas(prev => [...prev, newDoc]);
+        }
+      }
+      setShowForm(false);
+    } catch (e) {
+      console.error("Erro ao salvar", e);
+      alert("Erro ao salvar receita no banco de dados.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (receita) => {
+    let toDeleteIds = [receita.id];
+    
+    if (receita.recurrenceId) {
+      const confirmAction = window.prompt("Esta receita faz parte de uma recorrência.\nDigite '1' para excluir apenas esta.\nDigite '2' para excluir TODAS as recorrências futuras.\nDigite '3' para excluir TODAS as recorrências (passadas e futuras).", "1");
+      
+      if (confirmAction === '2') {
+        const futureDocs = receitas.filter(r => r.recurrenceId === receita.recurrenceId && r.data >= receita.data);
+        toDeleteIds = futureDocs.map(r => r.id);
+      } else if (confirmAction === '3') {
+        const allDocs = receitas.filter(r => r.recurrenceId === receita.recurrenceId);
+        toDeleteIds = allDocs.map(r => r.id);
+      } else if (confirmAction !== '1') {
+        return; // cancelado
+      }
+    } else {
+      if (!window.confirm("Tem certeza que deseja excluir esta receita?")) return;
+    }
+
+    try {
+      await appwriteService.deletarVarios(COLLECTIONS.RECEITAS, toDeleteIds);
+      setReceitas(prev => prev.filter(r => !toDeleteIds.includes(r.id)));
+    } catch (e) {
+      alert("Erro ao excluir do banco de dados.");
+    }
+  };
+
+  const handleDuplicate = async (receita) => {
+    try {
+      const duplicated = { 
+        data: new Date().toISOString().split('T')[0],
+        descricao: `${receita.descricao} (Cópia)`,
+        categoria: receita.categoria,
+        valor: receita.valor,
+        recorrente: false, // não clona a tag de recorrente
+        observacoes: receita.observacoes
+      };
+      const newDoc = await appwriteService.criar(COLLECTIONS.RECEITAS, user.$id, duplicated);
+      setReceitas(prev => [...prev, newDoc]);
+    } catch (e) {
+      alert("Erro ao duplicar receita.");
+    }
   };
 
   // Funções do Gerenciador de Categorias
@@ -214,10 +305,34 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
               <input type="checkbox" id="rec" checked={form.recorrente} onChange={e => setForm({ ...form, recorrente: e.target.checked })} style={{ width: 16, height: 16 }} />
               <label htmlFor="rec" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>Recorrente</label>
             </div>
+            
+            {form.recorrente && !editingId && (
+              <div className="form-group" style={{ gridColumn: '1 / -1', background: 'var(--bg-secondary)', padding: 16, borderRadius: 12, marginTop: 8 }}>
+                <label className="label mb-3">Opções de Recorrência Automática:</label>
+                <div style={{ display: 'flex', gap: 24, flexDirection: 'column' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                    <input type="radio" name="recType" checked={form.tipoRecorrencia === 'indefinidamente'} onChange={() => setForm({...form, tipoRecorrencia: 'indefinidamente'})} />
+                    <span>♾️ Indefinidamente <span style={{fontSize: 12, color: 'var(--text-muted)'}}>(Gera receitas mensais até 31/12 do ano atual)</span></span>
+                  </label>
+                  
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+                    <input type="radio" name="recType" checked={form.tipoRecorrencia === 'data'} onChange={() => setForm({...form, tipoRecorrencia: 'data'})} />
+                    <span>⏰ Até qual data:</span>
+                  </label>
+                  
+                  {form.tipoRecorrencia === 'data' && (
+                    <input type="date" className="input" style={{ width: 200, marginLeft: 28 }} value={form.dataFimRecorrencia} onChange={e => setForm({...form, dataFimRecorrencia: e.target.value})} />
+                  )}
+                </div>
+              </div>
+            )}
+            
           </div>
           <div className="flex gap-2 mt-4">
-            <button className="btn btn-success" onClick={handleSave}>{editingId ? 'Salvar Alterações' : 'Salvar'}</button>
-            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+            <button className="btn btn-success" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? <Loader2 size={16} className="spin" /> : (editingId ? 'Salvar Alterações' : 'Salvar')}
+            </button>
+            <button className="btn btn-ghost" onClick={() => setShowForm(false)} disabled={isSaving}>Cancelar</button>
           </div>
         </div>
       )}
@@ -285,7 +400,7 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
                         <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDuplicate(r)} title="Duplicar">
                           <Copy size={14} color="var(--text-secondary)" />
                         </button>
-                        <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(r.id)} title="Excluir">
+                        <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(r)} title="Excluir">
                           <Trash2 size={14} color="var(--accent-red)" />
                         </button>
                       </div>
