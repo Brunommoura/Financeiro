@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Edit2, Copy, Search, Settings, CreditCard, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Copy, Search, Settings, CreditCard, Loader2, Upload } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthKey } from '../utils/helpers';
 import { appwriteService } from '../services/appwriteService';
 import { COLLECTIONS } from '../lib/appwrite';
+import ImportModal from './ImportModal';
 
 const TIPOS = ['Fixa', 'Variável', 'Parcelada'];
 const PAGAMENTOS = ['Débito', 'Crédito', 'PIX', 'Dinheiro', 'Boleto'];
@@ -11,6 +12,7 @@ const STATUS = ['Pago', 'Pendente'];
 export default function Despesas({ despesas, setDespesas, categories, setCategories, cartoes, user }) {
   const [showForm, setShowForm] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -271,6 +273,9 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
           <p className="text-secondary">Total filtrado: <strong style={{ color: 'var(--accent-red)' }}>{formatCurrency(total)}</strong></p>
         </div>
         <div className="flex gap-2">
+          <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
+            <Upload size={16} /> Importar Planilha
+          </button>
           <button className="btn btn-ghost" onClick={() => setShowCatManager(true)}>
             <Settings size={16} /> Categorias
           </button>
@@ -279,6 +284,14 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
           </button>
         </div>
       </div>
+
+      <ImportModal 
+        isOpen={showImportModal} 
+        onClose={() => setShowImportModal(false)} 
+        initialType="despesas" 
+        user={user} 
+        onImportSuccess={() => window.location.reload()} 
+      />
 
       {showCatManager && (
         <div className="card mb-4 animate-fade" style={{ borderColor: 'var(--border)' }}>

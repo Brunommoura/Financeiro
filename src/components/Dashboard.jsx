@@ -5,10 +5,66 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Area, AreaChart, BarChart, Bar, ReferenceLine
 } from 'recharts';
 import { formatCurrency, formatPercent, getMonthKey, formatMonthLabel, calcNextInstallments } from '../utils/helpers';
-import { account } from '../lib/appwrite';
+import { account, databases, COLLECTIONS, DATABASE_ID, Query } from '../lib/appwrite';
 
-const COLORS_RECEITA = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#06b6d4'];
-const COLORS_DESPESA = ['#ef4444', '#f97316', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981', '#64748b'];
+const gerarCorPadrao = (nome) => {
+  const paleta = [
+    '#3B82F6','#10B981','#F59E0B','#EF4444',
+    '#8B5CF6','#EC4899','#06B6D4','#84CC16',
+    '#F97316','#6366F1','#14B8A6','#F43F5E'
+  ];
+  const indice = String(nome).split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % paleta.length;
+  return paleta[indice];
+};
+
+const agruparPequenos = (dados, coresMap, limiteMinimo = 3) => {
+  const total = dados.reduce((acc, d) => acc + d.value, 0);
+  const grandes = [];
+  let somaOthers = 0;
+  const nomesOthers = [];
+
+  dados.forEach(item => {
+    const percentual = total > 0 ? (item.value / total) * 100 : 0;
+    if (percentual >= limiteMinimo) {
+      grandes.push({ ...item, fill: coresMap[item.name] || gerarCorPadrao(item.name) });
+    } else {
+      somaOthers += item.value;
+      nomesOthers.push(item.name);
+    }
+  });
+
+  if (somaOthers > 0) {
+    grandes.push({
+      name: `Outros (${nomesOthers.length})`,
+      value: somaOthers,
+      fill: '#9CA3AF',
+      tooltip: nomesOthers.join(', ')
+    });
+  }
+
+  return grandes;
+};
+
+const TooltipCustomizado = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    const item = payload[0];
+    const data = item.payload;
+    return (
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+        <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{data.name}</p>
+        {data.tooltip && (
+          <p style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>
+            Inclui: {data.tooltip}
+          </p>
+        )}
+        <div style={{ color: item.color || data.fill, fontWeight: 700 }}>
+          {formatCurrency(item.value)}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const CustomTooltipCurrency = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -40,22 +96,122 @@ const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, v
 };
 
 export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, setSelectedMonth, availableMonths }) {
-  const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais } = data;
+  const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, patrimonioHistorico, aproveitamentoMensal } = data;
 
   const [userName, setUserName] = useState('');
+  const [userId, setUserId] = useState(null);
+  const [coresReceitas, setCoresReceitas] = useState({});
+  const [coresDespesas, setCoresDespesas] = useState({});
+  const [dadosEvolucao, setDadosEvolucao] = useState([]);
 
   useEffect(() => {
     account.get().then(u => {
-      if (u && u.name) {
+      if (u && u.$id) {
         setUserName(u.name.split(' ')[0]);
+        setUserId(u.$id);
       }
     }).catch(e => console.error(e));
   }, []);
 
+  useEffect(() => {
+    if (!userId) return;
+    
+    const buscarCores = async () => {
+      try {
+        const resDespesas = await databases.listDocuments(DATABASE_ID, COLLECTIONS.CATEGORIAS, [
+          Query.equal('userId', userId),
+          Query.equal('tipo', 'despesa')
+        ]);
+        const mapD = {};
+        resDespesas.documents.forEach(c => mapD[c.nome] = c.cor);
+        setCoresDespesas(mapD);
+
+        const resReceitas = await databases.listDocuments(DATABASE_ID, COLLECTIONS.CATEGORIAS, [
+          Query.equal('userId', userId),
+          Query.equal('tipo', 'receita')
+        ]);
+        const mapR = {};
+        resReceitas.documents.forEach(c => mapR[c.nome] = c.cor);
+        setCoresReceitas(mapR);
+      } catch (e) {
+        console.error("Erro ao buscar cores:", e);
+      }
+    };
+    
+    buscarCores();
+  }, [userId]);
+
+  const calcularEvolucaoMensal = async (uid) => {
+    try {
+      const hoje = new Date();
+      const inicio = new Date();
+      inicio.setMonth(inicio.getMonth() - 5);
+      inicio.setDate(1);
+      inicio.setHours(0, 0, 0, 0);
+
+      const resReceitas = await databases.listDocuments(DATABASE_ID, COLLECTIONS.RECEITAS, [
+        Query.equal('userId', uid),
+        Query.greaterThanEqual('data', inicio.toISOString().split('T')[0]),
+        Query.lessThanEqual('data', hoje.toISOString().split('T')[0] + 'T23:59:59'),
+        Query.limit(5000)
+      ]);
+
+      const resDespesas = await databases.listDocuments(DATABASE_ID, COLLECTIONS.DESPESAS, [
+        Query.equal('userId', uid),
+        Query.greaterThanEqual('data', inicio.toISOString().split('T')[0]),
+        Query.lessThanEqual('data', hoje.toISOString().split('T')[0] + 'T23:59:59'),
+        Query.limit(5000)
+      ]);
+
+      const mesesList = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - i);
+        mesesList.push({
+          mes: d.getMonth(),
+          ano: d.getFullYear(),
+          label: d.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', '').replace(' ', '/'),
+          receitas: 0,
+          despesas: 0,
+          saldo: 0
+        });
+      }
+
+      resReceitas.documents.forEach(doc => {
+        let dateVal = doc.data;
+        if (!dateVal.includes('T')) dateVal += 'T12:00:00Z';
+        const data = new Date(dateVal);
+        const mesEntry = mesesList.find(m => m.mes === data.getUTCMonth() && m.ano === data.getUTCFullYear());
+        if (mesEntry) mesEntry.receitas += doc.valor;
+      });
+
+      resDespesas.documents.forEach(doc => {
+        let dateVal = doc.data;
+        if (!dateVal.includes('T')) dateVal += 'T12:00:00Z';
+        const data = new Date(dateVal);
+        const mesEntry = mesesList.find(m => m.mes === data.getUTCMonth() && m.ano === data.getUTCFullYear());
+        if (mesEntry) mesEntry.despesas += doc.valor;
+      });
+
+      mesesList.forEach(m => {
+        m.saldo = m.receitas - m.despesas;
+      });
+
+      return mesesList.map(m => ({ mes: m.label, receitas: m.receitas, despesas: m.despesas, saldo: m.saldo }));
+    } catch (e) {
+      console.error(e);
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    if (userId) {
+      calcularEvolucaoMensal(userId).then(dados => setDadosEvolucao(dados));
+    }
+  }, [userId, receitas, despesas]);
+
   // Evolução financeira mensal
-  const evolucaoData = useMemo(() => {
-    return (receitasDespesasMensais || []).map(m => ({ ...m, saldo: m.receitas - m.despesas }));
-  }, [receitasDespesasMensais]);
+  const evolucaoData = dadosEvolucao;
 
   const evolucaoStats = useMemo(() => {
     if (!evolucaoData.length) return null;
@@ -94,15 +250,17 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   const receitasByCategoria = useMemo(() => {
     const map = {};
     filteredReceitas.forEach(r => { map[r.categoria] = (map[r.categoria] || 0) + r.valor; });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [filteredReceitas]);
+    const raw = Object.entries(map).map(([name, value]) => ({ name, value }));
+    return agruparPequenos(raw, coresReceitas, 3);
+  }, [filteredReceitas, coresReceitas]);
 
   // Pie data despesas
   const despesasByCategoria = useMemo(() => {
     const map = {};
     filteredDespesas.forEach(d => { map[d.categoria] = (map[d.categoria] || 0) + d.valor; });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [filteredDespesas]);
+    const raw = Object.entries(map).map(([name, value]) => ({ name, value }));
+    return agruparPequenos(raw, coresDespesas, 3);
+  }, [filteredDespesas, coresDespesas]);
 
   // Despesas por tipo
   const despesasTipo = useMemo(() => {
@@ -239,13 +397,29 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
           <div className="section-header mb-3">
             <div className="section-title">Categorias de Receitas</div>
           </div>
-          <ResponsiveContainer width="100%" height={250}>
+          <ResponsiveContainer width="100%" height={320}>
             <PieChart>
-              <Pie data={receitasByCategoria} cx="50%" cy="50%" outerRadius={90} dataKey="value" labelLine={false} label={CustomPieLabel}>
-                {receitasByCategoria.map((_, i) => <Cell key={i} fill={COLORS_RECEITA[i % COLORS_RECEITA.length]} />)}
+              <Pie data={receitasByCategoria} cx="50%" cy="50%" outerRadius={90} dataKey="value" label={false}>
+                {receitasByCategoria.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
               </Pie>
-              <Tooltip formatter={(v) => formatCurrency(v)} />
-              <Legend formatter={(v, e) => `${v}: ${formatCurrency(e.payload.value)}`} />
+              <Tooltip content={<TooltipCustomizado />} />
+              <Legend
+                layout="vertical"
+                align="right"
+                verticalAlign="middle"
+                iconType="circle"
+                iconSize={10}
+                formatter={(value) => (
+                  <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                    {value.length > 14 ? value.substring(0, 12) + '...' : value}
+                  </span>
+                )}
+                wrapperStyle={{
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  paddingLeft: '10px'
+                }}
+              />
             </PieChart>
           </ResponsiveContainer>
         </div>
@@ -254,13 +428,29 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
           <div className="section-header mb-3">
             <div className="section-title">Categorias de Despesas</div>
           </div>
-          <ResponsiveContainer width="100%" height={250}>
+          <ResponsiveContainer width="100%" height={320}>
             <PieChart>
-              <Pie data={despesasByCategoria} cx="50%" cy="50%" outerRadius={90} dataKey="value" labelLine={false} label={CustomPieLabel}>
-                {despesasByCategoria.map((_, i) => <Cell key={i} fill={COLORS_DESPESA[i % COLORS_DESPESA.length]} />)}
+              <Pie data={despesasByCategoria} cx="50%" cy="50%" outerRadius={90} dataKey="value" label={false}>
+                {despesasByCategoria.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
               </Pie>
-              <Tooltip formatter={(v) => formatCurrency(v)} />
-              <Legend formatter={(v, e) => `${v}: ${formatCurrency(e.payload.value)}`} />
+              <Tooltip content={<TooltipCustomizado />} />
+              <Legend
+                layout="vertical"
+                align="right"
+                verticalAlign="middle"
+                iconType="circle"
+                iconSize={10}
+                formatter={(value) => (
+                  <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                    {value.length > 14 ? value.substring(0, 12) + '...' : value}
+                  </span>
+                )}
+                wrapperStyle={{
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  paddingLeft: '10px'
+                }}
+              />
             </PieChart>
           </ResponsiveContainer>
         </div>
@@ -374,7 +564,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie data={patrimonioByTipo} cx="50%" cy="50%" outerRadius={75} innerRadius={35} dataKey="value" labelLine={false} label={CustomPieLabel}>
-                {patrimonioByTipo.map((_, i) => <Cell key={i} fill={COLORS_RECEITA[i % COLORS_RECEITA.length]} />)}
+                {patrimonioByTipo.map((entry, i) => <Cell key={i} fill={gerarCorPadrao(entry.name)} />)}
               </Pie>
               <Tooltip formatter={(v) => formatCurrency(v)} />
               <Legend />

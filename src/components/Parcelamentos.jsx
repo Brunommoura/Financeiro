@@ -1,14 +1,16 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Edit2, CreditCard, ChevronDown, ChevronUp, DollarSign, XCircle, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, CreditCard, ChevronDown, ChevronUp, DollarSign, XCircle, Loader2, CheckCircle, Upload } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/helpers';
 import { appwriteService } from '../services/appwriteService';
 import { COLLECTIONS, Query } from '../lib/appwrite';
+import ImportModal from './ImportModal';
 
 export default function Parcelamentos({ parcelamentos, setParcelamentos, despesas, setDespesas, cartoes, categories, user }) {
   const [showForm, setShowForm] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [form, setForm] = useState({
     description: '', totalValue: '', installmentCount: '', startDate: new Date().toISOString().split('T')[0],
     cardId: '', category: 'Outros', notes: ''
@@ -228,6 +230,28 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
     }
   };
 
+  const handleMarkAllPaid = async (parcelamento) => {
+    const pendentes = despesas.filter(d => (d.parcelamentoId || d.installmentId) === parcelamento.id && d.status === 'Pendente');
+    if (pendentes.length === 0) return;
+    
+    try {
+      const idsToUpdate = pendentes.map(d => d.id);
+      
+      for (const id of idsToUpdate) {
+        await appwriteService.atualizar(COLLECTIONS.DESPESAS, id, { status: 'Pago' });
+      }
+      
+      await appwriteService.atualizar(COLLECTIONS.PARCELAMENTOS, parcelamento.id, { status: 'completed' });
+      
+      setDespesas(prev => prev.map(d => idsToUpdate.includes(d.id) ? { ...d, status: 'Pago' } : d));
+      setParcelamentos(prev => prev.map(p => p.id === parcelamento.id ? { ...p, status: 'completed' } : p));
+      
+    } catch (e) {
+      alert("Erro ao marcar parcelas como pagas.");
+      console.error(e);
+    }
+  };
+
   // Calcular métricas ativas do Dashboard
   const ativos = parcelamentos.filter(p => p.status === 'active' || (p.status !== 'cancelled' && p.status !== 'completed' && despesas.some(d => (d.parcelamentoId || d.installmentId) === p.id && d.status === 'Pendente')));
   const concluidos = parcelamentos.filter(p => p.status === 'completed' || (p.status !== 'cancelled' && despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id).length > 0 && despesas.filter(d => (d.parcelamentoId || d.installmentId) === p.id && d.status === 'Pendente').length === 0));
@@ -248,10 +272,23 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
           <h1 style={{ fontSize: 22, fontWeight: 800 }}>Parcelamentos</h1>
           <p className="text-secondary">Controle e automatização de compras parceladas</p>
         </div>
-        <button className="btn btn-primary" onClick={() => handleOpenForm()}>
-          <Plus size={16} /> Novo Parcelamento
-        </button>
+        <div className="flex gap-2">
+          <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
+            <Upload size={16} /> Importar Planilha
+          </button>
+          <button className="btn btn-primary" onClick={() => handleOpenForm()}>
+            <Plus size={16} /> Novo Parcelamento
+          </button>
+        </div>
       </div>
+
+      <ImportModal 
+        isOpen={showImportModal} 
+        onClose={() => setShowImportModal(false)} 
+        initialType="parcelamentos" 
+        user={user} 
+        onImportSuccess={() => window.location.reload()} 
+      />
 
       <div className="grid-4 mb-6">
         <div className="card text-center">
@@ -373,6 +410,11 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
                   <button className="btn btn-ghost btn-sm" onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}>
                     {expandedId === p.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />} Detalhes
                   </button>
+                  {pendentes.length > 0 && (
+                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleMarkAllPaid(p)} title="Marcar todas as parcelas como pagas">
+                      <CheckCircle size={14} color="var(--accent-green)" />
+                    </button>
+                  )}
                   <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleOpenForm(p)}>
                     <Edit2 size={14} color="var(--accent-blue)" />
                   </button>
