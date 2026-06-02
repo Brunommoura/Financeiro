@@ -39,14 +39,14 @@ function FinanceApp({ user, logout }) {
   const [appLoading, setAppLoading] = useState(true);
 
   // States
-  const [categories, setCategories] = useState(sampleData.categories);
-  const [cartoes, setCartoes] = useState(sampleData.cartoes);
+  const [categories, setCategories] = useState([]);
+  const [cartoes, setCartoes] = useState([]);
   const [receitas, setReceitas] = useState([]);
   const [despesas, setDespesas] = useState([]);
   const [parcelamentos, setParcelamentos] = useState([]);
-  const [patrimonio, setPatrimonio] = useState(sampleData.patrimonio);
-  const [dividasList, setDividasList] = useState(sampleData.dividasList);
-  const [metas, setMetas] = useState(sampleData.metas);
+  const [patrimonio, setPatrimonio] = useState([]);
+  const [dividasList, setDividasList] = useState([]);
+  const [metas, setMetas] = useState([]);
   const [tarefas, setTarefas] = useState(sampleData.tarefas);
   const [habitos, setHabitos] = useState(sampleData.habitos);
   const [patrimonioHistorico] = useState(sampleData.patrimonioHistorico);
@@ -64,10 +64,6 @@ function FinanceApp({ user, logout }) {
         if (localData) {
           const parsed = JSON.parse(localData);
           if (parsed.categories) setCategories(parsed.categories);
-          if (parsed.cartoes) setCartoes(parsed.cartoes);
-          if (parsed.patrimonio) setPatrimonio(parsed.patrimonio);
-          if (parsed.dividasList) setDividasList(parsed.dividasList);
-          if (parsed.metas) setMetas(parsed.metas);
           if (parsed.tarefas) setTarefas(parsed.tarefas);
           if (parsed.habitos) setHabitos(parsed.habitos);
         }
@@ -143,15 +139,15 @@ function FinanceApp({ user, logout }) {
       case 'despesas':
         return <Despesas despesas={despesas} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} user={user} />;
       case 'cartoes':
-        return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesas} />;
+        return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesas} user={user} />;
       case 'parcelamentos':
         return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesas} setDespesas={setDespesas} cartoes={cartoes} categories={categories} user={user} />;
       case 'patrimonio':
-        return <Patrimonio patrimonio={patrimonio} setPatrimonio={setPatrimonio} />;
+        return <Patrimonio patrimonio={patrimonio} setPatrimonio={setPatrimonio} user={user} />;
       case 'dividas':
-        return <Dividas dividasList={dividasList} setDividasList={setDividasList} />;
+        return <Dividas dividasList={dividasList} setDividasList={setDividasList} user={user} />;
       case 'metas':
-        return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} />;
+        return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} user={user} />;
       case 'produtividade':
         return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} />;
       case 'feedback':

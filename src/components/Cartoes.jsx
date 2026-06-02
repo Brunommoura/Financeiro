@@ -1,18 +1,54 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Plus, Trash2, Edit2, CreditCard, AlertCircle } from 'lucide-react';
 import { formatCurrency, getMonthKey } from '../utils/helpers';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
 
 const BANDEIRAS = ['Mastercard', 'Visa', 'Elo', 'Amex', 'Hipercard'];
 
-export default function Cartoes({ cartoes, setCartoes, despesas }) {
+export default function Cartoes({ cartoes, setCartoes, despesas, user }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [carregandoCartoes, setCarregandoCartoes] = useState(true);
   
   const [form, setForm] = useState({
     name: '', brand: 'Mastercard', lastDigits: '',
     limit: '', closingDay: '', dueDay: '', color: '#8B5CF6', active: true
   });
+
+  useEffect(() => {
+    const buscarCartoes = async () => {
+      try {
+        setCarregandoCartoes(true);
+        const response = await databases.listDocuments(
+          DATABASE_ID,
+          COLLECTIONS.CARTOES,
+          [
+            Query.equal('userId', user.$id),
+            Query.orderAsc('nome')
+          ]
+        );
+        const mappedCartoes = response.documents.map(d => ({
+          ...d,
+          id: d.$id,
+          name: d.nome,
+          brand: d.bandeira,
+          lastDigits: d.ultimosDigitos,
+          limit: d.limite,
+          closingDay: d.diaFechamento,
+          dueDay: d.diaVencimento,
+          color: d.cor,
+          active: d.ativo
+        }));
+        setCartoes(mappedCartoes);
+      } catch (error) {
+        console.error('Erro ao buscar cartões:', error);
+      } finally {
+        setCarregandoCartoes(false);
+      }
+    };
+    if (user) buscarCartoes();
+  }, [user, setCartoes]);
 
   const handleOpenForm = (cartao = null) => {
     if (cartao) {
@@ -25,44 +61,108 @@ export default function Cartoes({ cartoes, setCartoes, despesas }) {
     setShowForm(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name || !form.limit || !form.closingDay || !form.dueDay) return;
     
     const limit = parseFloat(form.limit);
     const closingDay = parseInt(form.closingDay);
     const dueDay = parseInt(form.dueDay);
 
-    if (editingId) {
-      setCartoes(prev => prev.map(c => c.id === editingId ? { ...form, id: c.id, limit, closingDay, dueDay } : c));
-    } else {
-      setCartoes(prev => [...prev, { ...form, id: Date.now(), limit, closingDay, dueDay }]);
+    try {
+      if (editingId) {
+        const doc = await databases.updateDocument(
+          DATABASE_ID,
+          COLLECTIONS.CARTOES,
+          editingId,
+          {
+            nome: form.name,
+            bandeira: form.brand,
+            ultimosDigitos: form.lastDigits || null,
+            limite: limit,
+            diaFechamento: closingDay,
+            diaVencimento: dueDay,
+            cor: form.color,
+            ativo: form.active
+          }
+        );
+        const updated = {
+          ...doc, id: doc.$id, name: doc.nome, brand: doc.bandeira, lastDigits: doc.ultimosDigitos, 
+          limit: doc.limite, closingDay: doc.diaFechamento, dueDay: doc.diaVencimento, color: doc.cor, active: doc.ativo
+        };
+        setCartoes(prev => prev.map(c => c.id === editingId ? updated : c));
+      } else {
+        const doc = await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.CARTOES,
+          ID.unique(),
+          {
+            userId: user.$id,
+            nome: form.name,
+            bandeira: form.brand,
+            ultimosDigitos: form.lastDigits || null,
+            limite: limit,
+            diaFechamento: closingDay,
+            diaVencimento: dueDay,
+            cor: form.color || '#6366F1',
+            ativo: true,
+            createdAt: new Date().toISOString()
+          },
+          [
+            Permission.read(Role.user(user.$id)),
+            Permission.update(Role.user(user.$id)),
+            Permission.delete(Role.user(user.$id))
+          ]
+        );
+        const novo = {
+          ...doc, id: doc.$id, name: doc.nome, brand: doc.bandeira, lastDigits: doc.ultimosDigitos, 
+          limit: doc.limite, closingDay: doc.diaFechamento, dueDay: doc.diaVencimento, color: doc.cor, active: doc.ativo
+        };
+        setCartoes(prev => [...prev, novo]);
+      }
+      setShowForm(false);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar cartão.');
     }
-    setShowForm(false);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     const hasDespesas = despesas.some(d => d.cartaoId === id);
     if (hasDespesas) {
       alert("Não é possível excluir um cartão que possui despesas vinculadas. Tente inativá-lo.");
       return;
     }
     if (window.confirm("Deseja realmente excluir este cartão?")) {
-      setCartoes(prev => prev.filter(c => c.id !== id));
+      try {
+        await databases.deleteDocument(DATABASE_ID, COLLECTIONS.CARTOES, id);
+        setCartoes(prev => prev.filter(c => c.id !== id));
+      } catch (e) {
+        console.error(e);
+        alert('Erro ao excluir cartão.');
+      }
     }
   };
 
-  const toggleActive = (id) => {
-    setCartoes(prev => prev.map(c => c.id === id ? { ...c, active: !c.active } : c));
+  const toggleActive = async (id) => {
+    const cartao = cartoes.find(c => c.id === id);
+    if (!cartao) return;
+    try {
+      const doc = await databases.updateDocument(
+        DATABASE_ID,
+        COLLECTIONS.CARTOES,
+        id,
+        { ativo: !cartao.active }
+      );
+      setCartoes(prev => prev.map(c => c.id === id ? { ...c, active: doc.ativo } : c));
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  // Cálculo de uso de cartões no mês atual
   const currentMonth = getMonthKey(new Date().toISOString().split('T')[0]);
   
   const cartoesComUso = useMemo(() => {
     return cartoes.map(c => {
-      // Filtrar despesas não pagas, ou que foram pro cartão este mês?
-      // O correto em cartão é somar as despesas que cairão na próxima fatura,
-      // mas para simplificar o dashboard do mês, pegamos as despesas do cartão no mês selecionado.
       const despesasMes = despesas.filter(d => d.cartaoId === c.id && getMonthKey(d.data) === currentMonth);
       const usadoMes = despesasMes.reduce((s, d) => s + d.valor, 0);
       return { ...c, usadoMes, disponivel: Math.max(0, c.limit - usadoMes) };
@@ -78,6 +178,15 @@ export default function Cartoes({ cartoes, setCartoes, despesas }) {
     usado: c.usadoMes,
     color: c.color
   })).filter(c => c.usado > 0);
+
+  if (carregandoCartoes) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3" style={{ borderBottomColor: 'transparent' }} />
+        <span className="text-muted">Carregando cartões...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade">
@@ -214,7 +323,8 @@ export default function Cartoes({ cartoes, setCartoes, despesas }) {
           
           {cartoes.length === 0 && (
             <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-              Nenhum cartão cadastrado.
+              <p>Nenhum cartão cadastrado ainda.</p>
+              <button className="btn btn-primary mt-2" onClick={() => handleOpenForm()}>+ Adicionar Cartão</button>
             </div>
           )}
         </div>

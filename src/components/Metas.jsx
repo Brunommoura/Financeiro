@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Plus, Trash2, Edit2 } from 'lucide-react';
 import { formatCurrency, formatPercent } from '../utils/helpers';
+import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
 
 const metaColors = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#f97316', '#06b6d4'];
 
@@ -155,9 +156,39 @@ function SimuladorAposentadoria() {
   );
 }
 
-export default function Metas({ metas, setMetas, receitas, despesas }) {
+export default function Metas({ metas, setMetas, receitas, despesas, user }) {
   const [showForm, setShowForm] = useState(false);
+  const [carregandoMetas, setCarregandoMetas] = useState(true);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ nome: '', valorAlvo: '', prazo: '', acumulado: '', descricao: '' });
+
+  useEffect(() => {
+    const buscarMetas = async () => {
+      try {
+        setCarregandoMetas(true);
+        const response = await databases.listDocuments(
+          DATABASE_ID,
+          COLLECTIONS.METAS,
+          [Query.equal('userId', user.$id)]
+        );
+        const mapped = response.documents.map(m => ({
+          ...m,
+          id: m.$id,
+          nome: m.nome,
+          valorAlvo: m.valorAlvo,
+          prazo: m.prazo ? m.prazo.split('T')[0] : '',
+          acumulado: m.valorAcumulado,
+          descricao: m.categoria || ''
+        }));
+        setMetas(mapped);
+      } catch (error) {
+        console.error('Erro ao buscar metas:', error);
+      } finally {
+        setCarregandoMetas(false);
+      }
+    };
+    if (user) buscarMetas();
+  }, [user, setMetas]);
 
   const saldoMensal = useMemo(() => {
     const totalReceitas = receitas.reduce((s, r) => s + r.valor, 0);
@@ -166,17 +197,99 @@ export default function Metas({ metas, setMetas, receitas, despesas }) {
     return (totalReceitas - totalDespesas) / Math.max(1, meses);
   }, [receitas, despesas]);
 
-  const handleAdd = () => {
-    if (!form.nome || !form.valorAlvo || !form.prazo) return;
-    setMetas(prev => [...prev, { ...form, id: Date.now(), valorAlvo: parseFloat(form.valorAlvo), acumulado: parseFloat(form.acumulado) || 0 }]);
-    setForm({ nome: '', valorAlvo: '', prazo: '', acumulado: '', descricao: '' });
-    setShowForm(false);
+  const handleOpenForm = (meta = null) => {
+    if (meta) {
+      setEditingId(meta.id);
+      setForm({ ...meta, valorAlvo: meta.valorAlvo.toString(), acumulado: meta.acumulado.toString() });
+    } else {
+      setEditingId(null);
+      setForm({ nome: '', valorAlvo: '', prazo: '', acumulado: '', descricao: '' });
+    }
+    setShowForm(true);
   };
 
-  const handleDelete = (id) => setMetas(prev => prev.filter(m => m.id !== id));
+  const handleAdd = async () => {
+    if (!form.nome || !form.valorAlvo || !form.prazo) return;
+    try {
+      if (editingId) {
+        const doc = await databases.updateDocument(
+          DATABASE_ID,
+          COLLECTIONS.METAS,
+          editingId,
+          {
+            nome: form.nome,
+            valorAlvo: parseFloat(form.valorAlvo),
+            prazo: new Date(form.prazo).toISOString(),
+            valorAcumulado: parseFloat(form.acumulado) || 0,
+            categoria: form.descricao || null
+          }
+        );
+        const updated = {
+          ...doc, id: doc.$id, nome: doc.nome, valorAlvo: doc.valorAlvo,
+          prazo: doc.prazo ? doc.prazo.split('T')[0] : '',
+          acumulado: doc.valorAcumulado, descricao: doc.categoria || ''
+        };
+        setMetas(prev => prev.map(m => m.id === editingId ? updated : m));
+      } else {
+        const doc = await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.METAS,
+          ID.unique(),
+          {
+            userId: user.$id,
+            nome: form.nome,
+            valorAlvo: parseFloat(form.valorAlvo),
+            prazo: new Date(form.prazo).toISOString(),
+            valorAcumulado: parseFloat(form.acumulado) || 0,
+            categoria: form.descricao || null,
+            ativa: true
+          },
+          [
+            Permission.read(Role.user(user.$id)),
+            Permission.update(Role.user(user.$id)),
+            Permission.delete(Role.user(user.$id))
+          ]
+        );
+        const novo = {
+          ...doc, id: doc.$id, nome: doc.nome, valorAlvo: doc.valorAlvo,
+          prazo: doc.prazo ? doc.prazo.split('T')[0] : '',
+          acumulado: doc.valorAcumulado, descricao: doc.categoria || ''
+        };
+        setMetas(prev => [...prev, novo]);
+      }
+      setShowForm(false);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar meta.');
+    }
+  };
 
-  const handleUpdateAcumulado = (id, value) => {
-    setMetas(prev => prev.map(m => m.id === id ? { ...m, acumulado: parseFloat(value) || 0 } : m));
+  const handleDelete = async (id) => {
+    if (window.confirm("Deseja excluir esta meta?")) {
+      try {
+        await databases.deleteDocument(DATABASE_ID, COLLECTIONS.METAS, id);
+        setMetas(prev => prev.filter(m => m.id !== id));
+      } catch (e) {
+        console.error(e);
+        alert('Erro ao excluir meta.');
+      }
+    }
+  };
+
+  const handleUpdateAcumulado = async (id, value) => {
+    const novoValor = parseFloat(value) || 0;
+    try {
+      await databases.updateDocument(
+        DATABASE_ID,
+        COLLECTIONS.METAS,
+        id,
+        { valorAcumulado: novoValor }
+      );
+      setMetas(prev => prev.map(m => m.id === id ? { ...m, acumulado: novoValor } : m));
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao atualizar acumulado.');
+    }
   };
 
   const calcMeta = (meta) => {
@@ -189,6 +302,15 @@ export default function Metas({ metas, setMetas, receitas, despesas }) {
     return { mesesRestantes, porMes, pct, falta };
   };
 
+  if (carregandoMetas) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3" style={{ borderBottomColor: 'transparent' }} />
+        <span className="text-muted">Carregando metas...</span>
+      </div>
+    );
+  }
+
   return (
     <div className="animate-fade">
       <div className="section-header mb-4">
@@ -196,14 +318,14 @@ export default function Metas({ metas, setMetas, receitas, despesas }) {
           <h1 style={{ fontSize: 22, fontWeight: 800 }}>Metas Financeiras</h1>
           <p className="text-secondary">Saldo disponível: <strong style={{ color: 'var(--accent-green)' }}>{formatCurrency(Math.max(0, saldoMensal))}/mês</strong></p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+        <button className="btn btn-primary" onClick={() => handleOpenForm()}>
           <Plus size={16} /> Nova Meta
         </button>
       </div>
 
       {showForm && (
         <div className="card mb-4 animate-fade" style={{ borderColor: 'var(--accent-blue)' }}>
-          <div className="section-title mb-3">Nova Meta</div>
+          <div className="section-title mb-3">{editingId ? 'Editar Meta' : 'Nova Meta'}</div>
           <div className="form-row">
             <div className="form-group">
               <label className="label">Nome da Meta</label>
@@ -233,80 +355,84 @@ export default function Metas({ metas, setMetas, receitas, despesas }) {
         </div>
       )}
 
-      <div className="grid-2 mb-6">
-        {metas.map((meta, idx) => {
-          const { mesesRestantes, porMes, pct, falta } = calcMeta(meta);
-          const concluida = pct >= 100;
-          const color = metaColors[idx % metaColors.length];
-          const viavel = porMes <= saldoMensal;
+      {metas.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)' }}>
+          <p>Nenhuma meta cadastrada. Comece agora!</p>
+          <button className="btn btn-primary mt-2" onClick={() => handleOpenForm()}>+ Adicionar Meta</button>
+        </div>
+      ) : (
+        <div className="grid-2 mb-6">
+          {metas.map((meta, idx) => {
+            const { mesesRestantes, porMes, pct, falta } = calcMeta(meta);
+            const concluida = pct >= 100;
+            const color = metaColors[idx % metaColors.length];
+            const viavel = porMes <= saldoMensal;
 
-          return (
-            <div key={meta.id} className="card" style={{ borderTop: `3px solid ${color}` }}>
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{meta.nome}</div>
-                  {meta.descricao && <div className="text-muted text-xs mt-1">{meta.descricao}</div>}
+            return (
+              <div key={meta.id} className="card" style={{ borderTop: `3px solid ${color}` }}>
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{meta.nome}</div>
+                    {meta.descricao && <div className="text-muted text-xs mt-1">{meta.descricao}</div>}
+                  </div>
+                  <div className="flex gap-2">
+                    {concluida && <span className="badge badge-green">✓ Atingida!</span>}
+                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleOpenForm(meta)}>
+                      <Edit2 size={14} color="var(--accent-blue)" />
+                    </button>
+                    <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(meta.id)}>
+                      <Trash2 size={14} color="var(--accent-red)" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  {concluida && <span className="badge badge-green">✓ Atingida!</span>}
-                  <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(meta.id)}>
-                    <Trash2 size={14} color="var(--accent-red)" />
-                  </button>
+
+                <div className="grid-2 mb-3" style={{ gap: 10 }}>
+                  <div style={{ padding: 10, background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, color, fontSize: 14 }}>{formatCurrency(meta.acumulado)}</div>
+                    <div className="text-xs text-muted">Acumulado</div>
+                  </div>
+                  <div style={{ padding: 10, background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{formatCurrency(meta.valorAlvo)}</div>
+                    <div className="text-xs text-muted">Meta</div>
+                  </div>
+                </div>
+
+                <div className="progress-bar mb-2" style={{ height: 10 }}>
+                  <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
+                </div>
+                <div className="flex justify-between text-xs mb-3">
+                  <span style={{ fontWeight: 600, color }}>{pct.toFixed(1)}%</span>
+                  <span className="text-muted">Falta {formatCurrency(falta)}</span>
+                </div>
+
+                <div style={{ padding: '10px 14px', background: 'var(--bg-secondary)', borderRadius: 8, fontSize: 12 }}>
+                  <div className="stat-row" style={{ paddingTop: 0 }}>
+                    <span className="text-muted">Prazo</span>
+                    <span>{meta.prazo?.split('-').reverse().join('/') || '—'} ({mesesRestantes} meses)</span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="text-muted">Economizar/mês</span>
+                    <span style={{ fontWeight: 700, color: viavel ? 'var(--accent-green)' : 'var(--accent-red)' }}>{formatCurrency(porMes)}</span>
+                  </div>
+                  {!viavel && !concluida && <div style={{ marginTop: 6, color: 'var(--accent-yellow)', fontSize: 11 }}>⚠️ Acima do saldo disponível. Ajuste receitas ou prazo.</div>}
+                  {viavel && !concluida && <div style={{ marginTop: 6, color: 'var(--accent-green)', fontSize: 11 }}>✓ Meta viável com o saldo atual!</div>}
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <input
+                    type="number" className="input"
+                    placeholder="Atualizar valor acumulado"
+                    key={meta.id + '_' + meta.acumulado}
+                    defaultValue={meta.acumulado}
+                    onBlur={e => handleUpdateAcumulado(meta.id, e.target.value)}
+                    style={{ fontSize: 13 }}
+                  />
                 </div>
               </div>
-
-              <div className="grid-2 mb-3" style={{ gap: 10 }}>
-                <div style={{ padding: 10, background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
-                  <div style={{ fontWeight: 700, color, fontSize: 14 }}>{formatCurrency(meta.acumulado)}</div>
-                  <div className="text-xs text-muted">Acumulado</div>
-                </div>
-                <div style={{ padding: 10, background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{formatCurrency(meta.valorAlvo)}</div>
-                  <div className="text-xs text-muted">Meta</div>
-                </div>
-              </div>
-
-              <div className="progress-bar mb-2" style={{ height: 10 }}>
-                <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
-              </div>
-              <div className="flex justify-between text-xs mb-3">
-                <span style={{ fontWeight: 600, color }}>{pct.toFixed(1)}%</span>
-                <span className="text-muted">Falta {formatCurrency(falta)}</span>
-              </div>
-
-              <div style={{ padding: '10px 14px', background: 'var(--bg-secondary)', borderRadius: 8, fontSize: 12 }}>
-                <div className="stat-row" style={{ paddingTop: 0 }}>
-                  <span className="text-muted">Prazo</span>
-                  <span>{meta.prazo?.split('-').reverse().join('/') || '—'} ({mesesRestantes} meses)</span>
-                </div>
-                <div className="stat-row">
-                  <span className="text-muted">Economizar/mês</span>
-                  <span style={{ fontWeight: 700, color: viavel ? 'var(--accent-green)' : 'var(--accent-red)' }}>{formatCurrency(porMes)}</span>
-                </div>
-                {!viavel && !concluida && <div style={{ marginTop: 6, color: 'var(--accent-yellow)', fontSize: 11 }}>⚠️ Acima do saldo disponível. Ajuste receitas ou prazo.</div>}
-                {viavel && !concluida && <div style={{ marginTop: 6, color: 'var(--accent-green)', fontSize: 11 }}>✓ Meta viável com o saldo atual!</div>}
-              </div>
-
-              <div className="flex gap-2 mt-3">
-                <input
-                  type="number" className="input"
-                  placeholder="Atualizar valor acumulado"
-                  key={meta.id + '_' + meta.acumulado}
-                  defaultValue={meta.acumulado}
-                  onBlur={e => handleUpdateAcumulado(meta.id, e.target.value)}
-                  style={{ fontSize: 13 }}
-                />
-              </div>
-            </div>
-          );
-        })}
-
-        {metas.length === 0 && (
-          <div className="card" style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)', gridColumn: '1/-1' }}>
-            Nenhuma meta cadastrada. Comece agora!
-          </div>
-        )}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Calculadoras */}
       <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Calculadoras</h2>

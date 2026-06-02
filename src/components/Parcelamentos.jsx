@@ -287,7 +287,9 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
         onClose={() => setShowImportModal(false)} 
         initialType="parcelamentos" 
         user={user} 
-        onImportSuccess={() => window.location.reload()} 
+        setDespesas={setDespesas}
+        setParcelamentos={setParcelamentos}
+        onImportSuccess={() => {}} 
       />
 
       <div className="grid-4 mb-6">

@@ -290,7 +290,8 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
         onClose={() => setShowImportModal(false)} 
         initialType="despesas" 
         user={user} 
-        onImportSuccess={() => window.location.reload()} 
+        setDespesas={setDespesas}
+        onImportSuccess={() => {}} 
       />
 
       {showCatManager && (

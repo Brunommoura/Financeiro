@@ -5,19 +5,63 @@ import { appwriteService } from '../services/appwriteService';
 import { COLLECTIONS, ID, Permission, Role, Query } from '../lib/appwrite';
 import { databases, DATABASE_ID } from '../lib/appwrite';
 
-// Como o Appwrite config exporta databases e DATABASE_ID, podemos usá-los diretamente ou usar appwriteService.
-// Mas appwriteService.criar não recebe permissões como no snippet, entao usaremos appwriteService.criar que já usa isso, 
-// ou databases.createDocument para ter mais controle caso necessário.
-// O appwriteService.criar já adiciona permissões: appwriteService.js precisa ser verificado.
-// Para ser fiel ao snippet, vou usar databases.createDocument.
+const parsearData = (valorData) => {
+  if (!valorData) return null;
 
-export default function ImportModal({ isOpen, onClose, initialType = 'despesas', user, onImportSuccess }) {
+  if (valorData instanceof Date) {
+    if (isNaN(valorData.getTime())) return null;
+    return valorData;
+  }
+
+  if (typeof valorData === 'string' && valorData.includes('/')) {
+    const partes = valorData.trim().split('/');
+    if (partes.length === 3) {
+      const dia = parseInt(partes[0]);
+      const mes = parseInt(partes[1]) - 1; 
+      const ano = partes[2].length === 2
+        ? parseInt('20' + partes[2])
+        : parseInt(partes[2]);
+
+      const data = new Date(ano, mes, dia, 12, 0, 0);
+      if (!isNaN(data.getTime())) return data;
+    }
+  }
+
+  if (typeof valorData === 'string' && valorData.includes('-')) {
+    const data = new Date(valorData + 'T12:00:00'); 
+    if (!isNaN(data.getTime())) return data;
+  }
+
+  if (typeof valorData === 'number') {
+    const data = XLSX.SSF.parse_date_code(valorData);
+    if (data) {
+      return new Date(data.y, data.m - 1, data.d, 12, 0, 0);
+    }
+  }
+
+  return null;
+};
+
+const parsearValor = (valorBruto) => {
+  if (valorBruto === null || valorBruto === undefined || valorBruto === '') return null;
+  if (typeof valorBruto === 'number') return Math.abs(valorBruto);
+
+  let str = String(valorBruto).trim().replace(/[R$\s]/g, '');
+  if (str.includes(',')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  }
+
+  const numero = parseFloat(str);
+  return isNaN(numero) ? null : Math.abs(numero);
+};
+
+export default function ImportModal({ isOpen, onClose, initialType = 'despesas', user, onImportSuccess, setDespesas, setParcelamentos }) {
   const [tipo, setTipo] = useState(initialType);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState([]);
-  const [linhas, setLinhas] = useState([]);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
+  const [linhasPreview, setLinhasPreview] = useState([]);
+  const [importando, setImportando] = useState(false);
+  const [resultadoImportacao, setResultadoImportacao] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -25,9 +69,10 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
       setTipo(initialType);
       setFile(null);
       setPreview([]);
-      setLinhas([]);
-      setImportResult(null);
+      setLinhasPreview([]);
+      setResultadoImportacao(null);
       setErrorMsg('');
+      setImportando(false);
     }
   }, [isOpen, initialType]);
 
@@ -35,83 +80,184 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
   const baixarTemplate = () => {
     let dados;
+    let nomeArquivo;
+
     if (tipo === 'despesas') {
       dados = [
         {
-          Data: '10/05/2026',
-          Descricao: 'Supermercado Extra',
-          Tipo: 'Variável',
-          Categoria: 'Alimentação',
-          Valor: 350.00,
-          FormaPagamento: 'Dinheiro',
-          Status: 'Pago',
-          Observacoes: ''
+          'Data': '10/05/2026',
+          'Descricao': 'Supermercado Extra',
+          'Tipo': 'Variável',
+          'Categoria': 'Alimentação',
+          'Valor': 350.00,
+          'FormaPagamento': 'Dinheiro',
+          'Cartao': '',
+          'Status': 'Pago',
+          'Observacoes': 'Compra semanal'
         },
         {
-          Data: '05/05/2026',
-          Descricao: 'Aluguel',
-          Tipo: 'Fixa',
-          Categoria: 'Moradia',
-          Valor: 2000.00,
-          FormaPagamento: 'Transferência',
-          Status: 'Pago',
-          Observacoes: 'Maio/26'
+          'Data': '05/05/2026',
+          'Descricao': 'Aluguel',
+          'Tipo': 'Fixa',
+          'Categoria': 'Moradia',
+          'Valor': 2000.00,
+          'FormaPagamento': 'Transferência',
+          'Cartao': '',
+          'Status': 'Pago',
+          'Observacoes': 'Maio/2026'
         }
       ];
-    } else {
+      nomeArquivo = 'modelo_despesas.xlsx';
+    } else { 
       dados = [
         {
-          Descricao: 'Notebook Dell',
-          ValorTotal: 3000.00,
-          NumeroParcelas: 12,
-          DataPrimeiraParcela: '10/01/2026',
-          Cartao: 'Nubank',
-          Categoria: 'Tecnologia',
-          Observacoes: ''
+          'Descricao': 'Notebook Dell',
+          'ValorTotal': 3000.00,
+          'NumeroParcelas': 12,
+          'DataPrimeiraParcela': '10/01/2026',
+          'Cartao': 'Nubank',
+          'Categoria': 'Tecnologia',
+          'Observacoes': 'Compra no Magazine Luiza'
         }
       ];
+      nomeArquivo = 'modelo_parcelamentos.xlsx';
     }
 
     const ws = XLSX.utils.json_to_sheet(dados);
+    const wscols = Object.keys(dados[0]).map(key => ({ wch: Math.max(key.length, 18) }));
+    ws['!cols'] = wscols;
+
+    const instrucoes = tipo === 'despesas'
+      ? [
+          { 'INSTRUÇÕES': '⚠️ Leia antes de preencher:' },
+          { 'INSTRUÇÕES': '1. Não altere os nomes das colunas' },
+          { 'INSTRUÇÕES': '2. Data: formato DD/MM/YYYY (ex: 05/05/2026)' },
+          { 'INSTRUÇÕES': '3. Tipo: deve ser exatamente "Fixa", "Variável" ou "Parcelada"' },
+          { 'INSTRUÇÕES': '4. Valor: use ponto como decimal (ex: 1500.90)' },
+          { 'INSTRUÇÕES': '5. FormaPagamento: "Dinheiro", "Débito", "Cartão de Crédito", "Transferência" ou "PIX"' },
+          { 'INSTRUÇÕES': '6. Cartao: preencha APENAS se FormaPagamento for "Cartão de Crédito"' },
+          { 'INSTRUÇÕES': '7. Cartao: nome exato como cadastrado na aba Cartões do sistema' },
+          { 'INSTRUÇÕES': '8. Status: "Pago" ou "Pendente"' },
+          { 'INSTRUÇÕES': '9. Categoria: deve existir no sistema (ou será criada como nova)' },
+          { 'INSTRUÇÕES': '10. Apague as linhas de exemplo e preencha com seus dados' },
+        ]
+      : [
+          { 'INSTRUÇÕES': '⚠️ Leia antes de preencher:' },
+          { 'INSTRUÇÕES': '1. Não altere os nomes das colunas' },
+          { 'INSTRUÇÕES': '2. DataPrimeiraParcela: formato DD/MM/YYYY (ex: 10/01/2026)' },
+          { 'INSTRUÇÕES': '3. ValorTotal: valor total da compra (ex: 3000.00)' },
+          { 'INSTRUÇÕES': '4. NumeroParcelas: número inteiro entre 2 e 60' },
+          { 'INSTRUÇÕES': '5. Cartao: nome EXATO como cadastrado na aba Cartões do sistema' },
+          { 'INSTRUÇÕES': '6. Cartao: campo obrigatório para parcelamentos' },
+          { 'INSTRUÇÕES': '7. O sistema gerará as parcelas automaticamente nas Despesas' },
+          { 'INSTRUÇÕES': '8. Apague as linhas de exemplo e preencha com seus dados' },
+        ];
+
+    const wsInstrucoes = XLSX.utils.json_to_sheet(instrucoes);
+    wsInstrucoes['!cols'] = [{ wch: 70 }];
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Dados');
-    XLSX.writeFile(wb, `modelo_${tipo}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, wsInstrucoes, 'Instruções');
+
+    XLSX.writeFile(wb, nomeArquivo);
   };
 
-  const lerArquivo = (fileObj) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target.result);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(sheet);
-          resolve(json);
-        } catch (err) {
-          reject(err);
-        }
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(fileObj);
+  const corrigirEncoding = (str) => {
+    if (!str || typeof str !== 'string') return str;
+
+    const mapaEncoding = {
+      'Ã£': 'ã', 'Ã¡': 'á', 'Ã ': 'à', 'Ã¢': 'â', 'Ã¤': 'ä',
+      'Ã©': 'é', 'Ã¨': 'è', 'Ãª': 'ê', 'Ã«': 'ë',
+      'Ã': 'í', 'Ã¬': 'ì', 'Ã®': 'î', 'Ã¯': 'ï',
+      'Ã³': 'ó', 'Ã²': 'ò', 'Ã´': 'ô', 'Ãµ': 'õ', 'Ã¶': 'ö',
+      'Ãº': 'ú', 'Ã¹': 'ù', 'Ã»': 'û', 'Ã¼': 'ü',
+      'Ã§': 'ç', 'Ã±': 'ñ',
+      'Ã': 'Á',  
+      'Ã‚': 'Â', 'Ãƒ': 'Ã', 'Ã„': 'Ä',
+      'Ã‰': 'É', 'ÃŠ': 'Ê', 'Ã‹': 'Ë',
+      'ÃŒ': 'Ì', 'Ã': 'Í',  'ÃŽ': 'Î', 'Ã': 'Ï',
+      'Ã\'': 'Ò', 'Ã"': 'Ó', 'Ã"': 'Ô', 'Ã•': 'Õ', 'Ã–': 'Ö',
+      'Ã™': 'Ù', 'Ãš': 'Ú', 'Ã›': 'Û', 'Ãœ': 'Ü',
+      'Ã‡': 'Ç', 'Ã\'': 'Ñ',
+      'â€œ': '"', 'â€': '"', 'â€™': "'", 'â€˜': "'",
+      'â€"': '–', 'â€"': '—', 'â€¦': '…'
+    };
+
+    let resultado = str;
+    Object.entries(mapaEncoding).forEach(([errado, correto]) => {
+      resultado = resultado.split(errado).join(correto);
     });
+
+    return resultado;
   };
 
-  const lerCSV = (fileObj) => {
+  const lerArquivoExcel = (fileObj) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
+      const extensao = fileObj.name.split('.').pop().toLowerCase();
+
       reader.onload = (e) => {
         try {
-          const workbook = XLSX.read(e.target.result, { type: 'string' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(sheet);
-          resolve(json);
-        } catch(err) {
-          reject(err);
+          let workbook;
+
+          if (extensao === 'csv') {
+            const textoUTF8 = new TextDecoder('utf-8').decode(
+              new Uint8Array(e.target.result)
+            );
+
+            const pareceCorrompido = /Ã[§£¢¡¤¥¦¨©ª«¬®¯°]/.test(textoUTF8);
+
+            const texto = pareceCorrompido
+              ? new TextDecoder('iso-8859-1').decode(new Uint8Array(e.target.result))
+              : textoUTF8;
+
+            workbook = XLSX.read(texto, {
+              type: 'string',
+              cellDates: true,
+              dateNF: 'dd/mm/yyyy'
+            });
+
+          } else {
+            workbook = XLSX.read(new Uint8Array(e.target.result), {
+              type: 'array',
+              cellDates: true,
+              dateNF: 'dd/mm/yyyy',
+              codepage: 65001 
+            });
+          }
+
+          const nomePrimeiraAba = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[nomePrimeiraAba];
+
+          const json = XLSX.utils.sheet_to_json(sheet, {
+            raw: false,
+            dateNF: 'dd/mm/yyyy',
+            defval: '' 
+          });
+
+          const jsonSanitizado = json.map(linha => {
+            const linhaSanitizada = {};
+            Object.keys(linha).forEach(chave => {
+              const valor = linha[chave];
+              const chaveLimpa = corrigirEncoding(String(chave));
+              linhaSanitizada[chaveLimpa] = typeof valor === 'string'
+                ? corrigirEncoding(valor)
+                : valor;
+            });
+            return linhaSanitizada;
+          });
+
+          resolve(jsonSanitizado);
+
+        } catch (err) {
+          reject(new Error('Arquivo inválido ou corrompido: ' + err.message));
         }
       };
-      reader.onerror = reject;
-      reader.readAsText(fileObj);
+
+      reader.onerror = () => reject(new Error('Erro ao ler o arquivo'));
+
+      reader.readAsArrayBuffer(fileObj);
     });
   };
 
@@ -127,192 +273,435 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
     setFile(selected);
     setErrorMsg('');
     try {
-      let data = [];
-      if (selected.name.endsWith('.csv')) {
-        data = await lerCSV(selected);
-      } else {
-        data = await lerArquivo(selected);
-      }
-      setLinhas(data);
+      const data = await lerArquivoExcel(selected);
+      setLinhasPreview(data);
       setPreview(data.slice(0, 5));
     } catch (err) {
-      setErrorMsg('Erro ao ler o arquivo. Certifique-se de que é um formato válido.');
+      setErrorMsg(err.message || 'Erro ao ler o arquivo. Certifique-se de que é um formato válido.');
     }
   };
 
   const calcularDataVencimento = (dataCompra, diaVencimento) => {
     if (!diaVencimento) return null;
     const d = new Date(dataCompra);
-    // Lógica simplificada: mês seguinte no dia do vencimento
     d.setMonth(d.getMonth() + 1);
     d.setDate(diaVencimento);
     return d;
   };
 
-  const importarDespesas = async (linhasData, userId) => {
+  const importarDespesasAppwrite = async (linhas, userId) => {
     const erros = [];
+    const avisos = [];
     const sucessos = [];
 
-    for (let i = 0; i < linhasData.length; i++) {
-      const linha = linhasData[i];
+    let cartoes = [];
+    try {
+      const resCartoes = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.CARTOES,
+        [Query.equal('userId', userId), Query.limit(100)]
+      );
+      cartoes = resCartoes.documents;
+    } catch (err) {
+      console.warn('Não foi possível buscar cartões:', err.message);
+    }
+
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = linhas[i];
+      const numLinha = i + 2;
+
       try {
-        if (!linha.Descricao || !linha.Valor || !linha.Data) {
-          erros.push({ linha: i + 2, erro: 'Campos obrigatórios faltando (Descrição, Valor, Data)' });
-          continue;
-        }
-
-        let dataISO;
-        if (typeof linha.Data === 'string' && linha.Data.includes('/')) {
-           const [dia, mes, ano] = linha.Data.split('/');
-           dataISO = new Date(ano.length === 2 ? `20${ano}` : ano, mes - 1, dia).toISOString();
-        } else {
-           // Se o excel formatou como data (numero sequencial do excel) ou algo diferente, vamos tentar Date normal
-           dataISO = new Date(linha.Data).toISOString();
-           if (isNaN(new Date(dataISO).getTime())) {
-               erros.push({ linha: i + 2, erro: 'Formato de data inválido' });
-               continue;
-           }
-        }
-
-        const valor = parseFloat(String(linha.Valor).replace(',', '.'));
-        if (isNaN(valor) || valor <= 0) {
-          erros.push({ linha: i + 2, erro: 'Valor inválido' });
-          continue;
-        }
-
-        const doc = {
-          data: dataISO.split('T')[0],
-          descricao: String(linha.Descricao),
-          tipo: linha.Tipo || 'Variável',
-          categoria: linha.Categoria || 'Outros',
-          valor,
-          formaPagamento: linha.FormaPagamento || 'Débito',
-          status: linha.Status || 'Pendente',
-          observacoes: linha.Observacoes || ''
+        const get = (chaves) => {
+          for (const chave of chaves) {
+            if (linha[chave] !== undefined && linha[chave] !== '') return linha[chave];
+          }
+          return null;
         };
 
-        await appwriteService.criar(COLLECTIONS.DESPESAS, userId, doc);
-        sucessos.push(linha);
+        const descricaoRaw = get(['Descricao', 'Descrição', 'descricao', 'DESCRICAO']);
+        const dataRaw      = get(['Data', 'data', 'DATA']);
+        const valorRaw     = get(['Valor', 'valor', 'VALOR']);
+        const tipoRaw      = get(['Tipo', 'tipo', 'TIPO']);
+        const categoriaRaw = get(['Categoria', 'categoria', 'CATEGORIA']);
+        const formaRaw     = get(['FormaPagamento', 'Forma de Pagamento', 'forma_pagamento', 'Forma Pagamento']);
+        const cartaoRaw    = get(['Cartao', 'Cartão', 'cartao', 'CARTAO']);
+        const statusRaw    = get(['Status', 'status', 'STATUS']);
+        const obsRaw       = get(['Observacoes', 'Observações', 'observacoes', 'Obs']);
+
+        if (!descricaoRaw) {
+          erros.push({ linha: numLinha, erro: 'Coluna "Descricao" vazia ou ausente' });
+          continue;
+        }
+        if (!dataRaw) {
+          erros.push({ linha: numLinha, erro: 'Coluna "Data" vazia ou ausente' });
+          continue;
+        }
+        if (valorRaw === null) {
+          erros.push({ linha: numLinha, erro: 'Coluna "Valor" vazia ou ausente' });
+          continue;
+        }
+
+        let dataObj = null;
+
+        if (dataRaw instanceof Date) {
+          dataObj = dataRaw;
+        } else if (typeof dataRaw === 'string') {
+          if (dataRaw.includes('/')) {
+            const [d, m, a] = dataRaw.trim().split('/');
+            const ano = a && a.length === 2 ? '20' + a : a;
+            dataObj = new Date(parseInt(ano), parseInt(m) - 1, parseInt(d), 12, 0, 0);
+          } else if (dataRaw.includes('-')) {
+            dataObj = new Date(dataRaw + 'T12:00:00');
+          }
+        } else if (typeof dataRaw === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          dataObj = new Date(excelEpoch.getTime() + dataRaw * 86400000);
+          dataObj.setHours(12, 0, 0, 0);
+        }
+
+        if (!dataObj || isNaN(dataObj.getTime())) {
+          erros.push({ linha: numLinha, erro: `Data inválida: "${dataRaw}". Use o formato DD/MM/YYYY` });
+          continue;
+        }
+
+        let valor = null;
+        if (typeof valorRaw === 'number') {
+          valor = Math.abs(valorRaw);
+        } else if (typeof valorRaw === 'string') {
+          const valorLimpo = valorRaw
+            .replace(/R\$\s?/g, '')
+            .replace(/\s/g, '')
+            .replace(/\.(?=\d{3})/g, '')
+            .replace(',', '.');
+          valor = Math.abs(parseFloat(valorLimpo));
+        }
+
+        if (valor === null || isNaN(valor) || valor <= 0) {
+          erros.push({ linha: numLinha, erro: `Valor inválido: "${valorRaw}"` });
+          continue;
+        }
+
+        const tiposMap = {
+          'fixa': 'Fixa', 'fixo': 'Fixa',
+          'variavel': 'Variável', 'variável': 'Variável',
+          'parcelada': 'Parcelada', 'parcelado': 'Parcelada'
+        };
+        const tipoNorm = tiposMap[(tipoRaw || '').toLowerCase()] || 'Variável';
+
+        const statusNorm = ['pago', 'paga', 'paid'].includes((statusRaw || '').toLowerCase())
+          ? 'Pago' : 'Pendente';
+
+        let cartaoId = null;
+        if (cartaoRaw && String(cartaoRaw).trim() !== '') {
+          const cartaoEncontrado = cartoes.find(c =>
+            c.nome.toLowerCase().trim() === String(cartaoRaw).toLowerCase().trim()
+          );
+          if (cartaoEncontrado) {
+            cartaoId = cartaoEncontrado.$id;
+          } else {
+            avisos.push({
+              linha: numLinha,
+              aviso: `Cartão "${cartaoRaw}" não encontrado. Despesa importada sem cartão.`
+            });
+          }
+        }
+
+        let dataVencimentoCartao = null;
+        if (cartaoId) {
+          const cartaoObj = cartoes.find(c => c.$id === cartaoId);
+          if (cartaoObj?.diaVencimento) {
+            const diaVenc = cartaoObj.diaVencimento;
+            const mesData = dataObj.getMonth();
+            const anoData = dataObj.getFullYear();
+            const diaData = dataObj.getDate();
+            const venc = diaData <= diaVenc
+              ? new Date(anoData, mesData, diaVenc, 12, 0, 0)
+              : new Date(anoData, mesData + 1, diaVenc, 12, 0, 0);
+            dataVencimentoCartao = venc.toISOString();
+          }
+        }
+
+        const dadosDespesa = {
+          userId,
+          data: dataObj.toISOString(),
+          descricao: String(descricaoRaw).trim(),
+          tipo: tipoNorm,
+          categoria: String(categoriaRaw || 'Outros').trim(),
+          valor,
+          status: statusNorm,
+          createdAt: new Date().toISOString()
+        };
+
+        if (formaRaw && String(formaRaw).trim()) {
+          dadosDespesa.formaPagamento = String(formaRaw).trim();
+        }
+        if (cartaoId) {
+          dadosDespesa.cartaoId = cartaoId;
+        }
+        if (dataVencimentoCartao) {
+          dadosDespesa.dataVencimentoCartao = dataVencimentoCartao;
+        }
+        if (obsRaw && String(obsRaw).trim()) {
+          dadosDespesa.observacoes = String(obsRaw).trim();
+        }
+
+        console.log(`📤 Importando linha ${numLinha}:`, dadosDespesa);
+
+        await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.DESPESAS,
+          ID.unique(),
+          dadosDespesa,
+          [
+            Permission.read(Role.user(userId)),
+            Permission.update(Role.user(userId)),
+            Permission.delete(Role.user(userId))
+          ]
+        );
+
+        console.log(`✅ Linha ${numLinha} importada com sucesso`);
+        sucessos.push({ linha: numLinha, descricao: String(descricaoRaw).trim() });
+
       } catch (error) {
-        erros.push({ linha: i + 2, erro: error.message });
+        console.error(`❌ Erro na linha ${numLinha}:`, error);
+        erros.push({ linha: numLinha, erro: `Erro ao salvar: ${error.message}` });
       }
     }
 
-    return { sucessos: sucessos.length, erros };
+    console.log(`🏁 Importação concluída: ${sucessos.length} sucesso(s), ${erros.length} erro(s)`);
+
+    return {
+      total: linhas.length,
+      importados: sucessos.length,
+      erros,
+      avisos
+    };
   };
 
-  const importarParcelamentos = async (linhasData, userId) => {
+  const importarParcelamentosAppwrite = async (linhas, userId) => {
     const erros = [];
+    const avisos = [];
     const sucessos = [];
-    
-    // Precisamos buscar cartoes para o appwriteService
+
     let cartoes = [];
     try {
-      cartoes = await appwriteService.listar(COLLECTIONS.CARTOES, userId);
-    } catch(e) {
-      // ignore
+      const resCartoes = await databases.listDocuments(DATABASE_ID, COLLECTIONS.CARTOES, [Query.equal('userId', userId)]);
+      cartoes = resCartoes.documents;
+    } catch (err) {
+      console.warn('Não foi possível buscar cartões:', err.message);
     }
 
-    for (let i = 0; i < linhasData.length; i++) {
-      const linha = linhasData[i];
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = linhas[i];
+      const numLinha = i + 2;
+
       try {
-        if (!linha.Descricao || !linha.ValorTotal || !linha.NumeroParcelas || !linha.DataPrimeiraParcela) {
-          erros.push({ linha: i + 2, erro: 'Campos obrigatórios faltando' });
+        const get = (chaves) => {
+          for (const chave of chaves) {
+            if (linha[chave] !== undefined && linha[chave] !== '') return linha[chave];
+          }
+          return null;
+        };
+
+        const descricao = get(['Descricao', 'Descrição', 'descricao']) || '';
+        const valorTotalBruto = get(['ValorTotal', 'Valor Total', 'valor_total']) || 0;
+        const numParcelasBruto = get(['NumeroParcelas', 'Numero de Parcelas', 'num_parcelas']) || 0;
+        const dataBruta = get(['DataPrimeiraParcela', 'Data Primeira Parcela']) || '';
+        const nomeCartao = get(['Cartao', 'Cartão']) || '';
+        const categoria = get(['Categoria']) || 'Outros';
+        const observacoes = get(['Observacoes', 'Observações']) || '';
+
+        if (!descricao.trim()) {
+          erros.push({ linha: numLinha, erro: 'Campo "Descricao" é obrigatório' });
           continue;
         }
 
-        const cartao = cartoes.find(c => c.name.toLowerCase() === String(linha.Cartao || '').toLowerCase());
-
-        let dataPrimeira;
-        if (typeof linha.DataPrimeiraParcela === 'string' && linha.DataPrimeiraParcela.includes('/')) {
-            const [dia, mes, ano] = linha.DataPrimeiraParcela.split('/');
-            dataPrimeira = new Date(ano.length === 2 ? `20${ano}` : ano, mes - 1, dia);
-        } else {
-            dataPrimeira = new Date(linha.DataPrimeiraParcela);
-            if (isNaN(dataPrimeira.getTime())) {
-               erros.push({ linha: i + 2, erro: 'Data inválida' });
-               continue;
-            }
+        const valorTotal = parsearValor(valorTotalBruto);
+        if (!valorTotal || valorTotal <= 0) {
+          erros.push({ linha: numLinha, erro: `ValorTotal inválido: "${valorTotalBruto}"` });
+          continue;
         }
 
-        const valorTotal = parseFloat(String(linha.ValorTotal).replace(',', '.'));
-        const numParcelas = parseInt(linha.NumeroParcelas);
-        
-        if (isNaN(valorTotal) || isNaN(numParcelas) || numParcelas < 2 || numParcelas > 60) {
-            erros.push({ linha: i + 2, erro: 'Valor ou parcelas inválidas' });
-            continue;
+        const numParcelas = parseInt(String(numParcelasBruto).replace(',', '.'));
+        if (isNaN(numParcelas) || numParcelas < 2 || numParcelas > 60) {
+          erros.push({ linha: numLinha, erro: `NumeroParcelas inválido: "${numParcelasBruto}". Deve ser entre 2 e 60` });
+          continue;
         }
-        
+
+        const dataPrimeira = parsearData(dataBruta);
+        if (!dataPrimeira) {
+          erros.push({ linha: numLinha, erro: `DataPrimeiraParcela inválida: "${dataBruta}". Use DD/MM/YYYY` });
+          continue;
+        }
+
+        let cartaoId = null;
+        let cartaoObj = null;
+
+        if (nomeCartao && nomeCartao.trim() !== '') {
+          cartaoObj = cartoes.find(c => c.nome && c.nome.toLowerCase().trim() === String(nomeCartao).toLowerCase().trim());
+          if (cartaoObj) {
+            cartaoId = cartaoObj.$id;
+          } else {
+            avisos.push({ linha: numLinha, aviso: `Cartão "${nomeCartao}" não encontrado. Parcelamento importado sem cartão vinculado.` });
+          }
+        }
+
         const valorParcela = parseFloat((valorTotal / numParcelas).toFixed(2));
+        const valorUltimaParcela = parseFloat((valorTotal - valorParcela * (numParcelas - 1)).toFixed(2));
 
-        const parcelamentoDoc = {
-          descricao: String(linha.Descricao),
+        const parcelamentoDados = {
+          userId,
+          descricao: String(descricao).trim(),
           valorTotal,
           numeroParcelas: numParcelas,
           valorParcela,
-          dataPrimeiraParcela: dataPrimeira.toISOString().split('T')[0],
-          cartaoId: cartao ? String(cartao.id) : '',
-          categoria: linha.Categoria || 'Outros',
+          dataPrimeiraParcela: dataPrimeira.toISOString(),
+          categoria: String(categoria).trim(),
           parcelasPagas: 0,
-          status: 'active',
-          observacoes: linha.Observacoes || ''
+          status: 'Ativo',
+          createdAt: new Date().toISOString()
         };
-
-        const novoMaster = await appwriteService.criar(COLLECTIONS.PARCELAMENTOS, userId, parcelamentoDoc);
-
-        const despesasDocs = [];
-        let cumulative = 0;
         
-        for (let j = 0; j < numParcelas; j++) {
-          const dataParcela = new Date(dataPrimeira);
-          dataParcela.setMonth(dataParcela.getMonth() + j);
+        if (cartaoId) parcelamentoDados.cartaoId = cartaoId;
+        if (observacoes && observacoes.trim()) parcelamentoDados.observacoes = String(observacoes).trim();
 
-          let val = valorParcela;
-          if (j === numParcelas - 1) {
-              val = parseFloat((valorTotal - cumulative).toFixed(2));
-          } else {
-              cumulative += val;
+        const parcelamento = await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.PARCELAMENTOS,
+          ID.unique(),
+          parcelamentoDados,
+          [Permission.read(Role.user(userId)), Permission.update(Role.user(userId)), Permission.delete(Role.user(userId))]
+        );
+
+        for (let p = 0; p < numParcelas; p++) {
+          const dataParcela = new Date(dataPrimeira);
+          dataParcela.setMonth(dataParcela.getMonth() + p);
+          if (dataParcela.getDate() !== dataPrimeira.getDate()) {
+            dataParcela.setDate(0); 
           }
 
-          despesasDocs.push({
-            parcelamentoId: novoMaster.id,
-            data: dataParcela.toISOString().split('T')[0],
-            descricao: `${linha.Descricao} - Parcela ${j + 1}/${numParcelas}`,
-            tipo: 'Parcelada',
-            categoria: linha.Categoria || 'Outros',
-            valor: val,
-            formaPagamento: cartao ? 'Crédito' : 'Débito',
-            cartaoId: cartao ? String(cartao.id) : '',
-            status: 'Pendente'
-          });
-        }
-        
-        await appwriteService.criarVarios(COLLECTIONS.DESPESAS, userId, despesasDocs);
+          let dataVencimentoCartao = null;
+          if (cartaoObj && cartaoObj.diaVencimento) {
+            const venc = calcularDataVencimento(dataParcela, cartaoObj.diaVencimento);
+            dataVencimentoCartao = venc ? venc.toISOString() : null;
+          }
 
-        sucessos.push(linha);
+          const valorEstaParcela = p === numParcelas - 1 ? valorUltimaParcela : valorParcela;
+
+          const despesaParcelada = {
+            userId,
+            data: dataParcela.toISOString(),
+            descricao: `${String(descricao).trim()} - Parcela ${p + 1}/${numParcelas}`,
+            tipo: 'Parcelada',
+            categoria: String(categoria).trim(),
+            valor: valorEstaParcela,
+            parcelamentoId: parcelamento.$id,
+            status: 'Pendente',
+            createdAt: new Date().toISOString()
+          };
+
+          if (cartaoId) {
+            despesaParcelada.cartaoId = cartaoId;
+            despesaParcelada.formaPagamento = 'Cartão de Crédito';
+          }
+          if (dataVencimentoCartao) despesaParcelada.dataVencimentoCartao = dataVencimentoCartao;
+
+          await databases.createDocument(
+            DATABASE_ID,
+            COLLECTIONS.DESPESAS,
+            ID.unique(),
+            despesaParcelada,
+            [Permission.read(Role.user(userId)), Permission.update(Role.user(userId)), Permission.delete(Role.user(userId))]
+          );
+        }
+
+        sucessos.push({ linha: numLinha, descricao });
       } catch (error) {
-        erros.push({ linha: i + 2, erro: error.message });
+        erros.push({ linha: numLinha, erro: `Erro inesperado: ${error.message}` });
       }
     }
-    return { sucessos: sucessos.length, erros };
+
+    return { total: linhas.length, importados: sucessos.length, erros, avisos };
   };
 
-  const handleImport = async () => {
-    if (!linhas || linhas.length === 0) return;
-    setIsImporting(true);
-    setImportResult(null);
+  const recarregarDespesas = async () => {
+    if (!setDespesas) return;
+    try {
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.DESPESAS,
+        [
+          Query.equal('userId', user.$id),
+          Query.orderDesc('data'),
+          Query.limit(500)
+        ]
+      );
+      setDespesas(response.documents);
+    } catch (error) {
+      console.error('Erro ao recarregar despesas:', error);
+    }
+  };
 
-    let res;
-    if (tipo === 'despesas') {
-      res = await importarDespesas(linhas, user.$id);
-    } else {
-      res = await importarParcelamentos(linhas, user.$id);
+  const recarregarParcelamentos = async () => {
+    if (!setParcelamentos) return;
+    try {
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.PARCELAMENTOS,
+        [
+          Query.equal('userId', user.$id),
+          Query.orderDesc('createdAt'),
+          Query.limit(200)
+        ]
+      );
+      setParcelamentos(response.documents);
+    } catch (error) {
+      console.error('Erro ao recarregar parcelamentos:', error);
+    }
+  };
+
+  const handleConfirmarImportacao = async () => {
+    if (!linhasPreview || linhasPreview.length === 0) {
+      alert('Nenhum dado para importar.');
+      return;
     }
 
-    setIsImporting(false);
-    setImportResult(res);
-    if (onImportSuccess) {
-      onImportSuccess();
+    setImportando(true);
+
+    try {
+      let resultado;
+
+      if (tipo === 'despesas') {
+        resultado = await importarDespesasAppwrite(linhasPreview, user.$id);
+      } else {
+        resultado = await importarParcelamentosAppwrite(linhasPreview, user.$id);
+      }
+
+      setResultadoImportacao(resultado);
+
+      if (tipo === 'despesas') {
+        await recarregarDespesas();
+      } else {
+        await recarregarParcelamentos();
+        await recarregarDespesas(); 
+      }
+      
+      if (onImportSuccess) {
+        onImportSuccess();
+      }
+
+    } catch (error) {
+      console.error('Erro crítico na importação:', error);
+      setResultadoImportacao({
+        total: linhasPreview.length,
+        importados: 0,
+        erros: [{ linha: 0, erro: 'Erro crítico: ' + error.message }],
+        avisos: []
+      });
+    } finally {
+      setImportando(false);
+      setLinhasPreview([]);
+      setFile(null);
     }
   };
 
@@ -323,27 +712,50 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div className="card" style={{ width: '90%', maxWidth: 700, maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="card" style={{ width: '90%', maxWidth: 700, maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}>
         <div className="flex justify-between items-center mb-4">
           <h2 style={{ fontSize: 20, fontWeight: 700 }}>Importar Planilha</h2>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={20} /></button>
         </div>
 
-        {importResult ? (
+        {resultadoImportacao ? (
           <div className="animate-fade">
             <div style={{ padding: 20, textAlign: 'center', background: 'var(--bg-secondary)', borderRadius: 8, marginBottom: 16 }}>
-              <div style={{ fontSize: 40, marginBottom: 10 }}>{importResult.erros.length === 0 ? '✅' : '⚠️'}</div>
-              <h3 style={{ fontSize: 18, fontWeight: 700 }}>Importação Concluída!</h3>
-              <p className="mt-2 text-muted">Registros importados: <strong className="text-green">{importResult.sucessos}</strong></p>
-              <p className="text-muted">Registros com erro: <strong className="text-red">{importResult.erros.length}</strong></p>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>{resultadoImportacao.erros.length === 0 ? '✅' : '⚠️'}</div>
+              <h3 style={{ fontSize: 18, fontWeight: 700 }}>Resultado da Importação</h3>
+              <div className="grid-3 mt-4" style={{ gap: 10 }}>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <p style={{ fontSize: 24, fontWeight: 800 }}>{resultadoImportacao.total}</p>
+                  <p className="text-xs text-muted">Total de linhas</p>
+                </div>
+                <div style={{ padding: 10, background: 'rgba(16,185,129,0.1)', borderRadius: 8, border: '1px solid rgba(16,185,129,0.2)' }}>
+                  <p style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-green)' }}>{resultadoImportacao.importados}</p>
+                  <p className="text-xs" style={{ color: 'var(--accent-green)' }}>Importados</p>
+                </div>
+                <div style={{ padding: 10, background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <p style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-red)' }}>{resultadoImportacao.erros.length}</p>
+                  <p className="text-xs" style={{ color: 'var(--accent-red)' }}>Erros</p>
+                </div>
+              </div>
             </div>
             
-            {importResult.erros.length > 0 && (
+            {resultadoImportacao.avisos?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <h4 style={{ fontWeight: 600, color: 'var(--accent-red)', marginBottom: 8 }}>Erros encontrados:</h4>
+                <h4 style={{ fontWeight: 600, color: '#eab308', marginBottom: 8 }}>⚠️ AVISOS:</h4>
+                <ul style={{ background: 'rgba(234, 179, 8, 0.1)', padding: 12, borderRadius: 8, fontSize: 13, color: '#ca8a04' }}>
+                  {resultadoImportacao.avisos.map((e, idx) => (
+                    <li key={idx} style={{ marginBottom: 4 }}>• Linha {e.linha}: {e.aviso}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {resultadoImportacao.erros?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <h4 style={{ fontWeight: 600, color: 'var(--accent-red)', marginBottom: 8 }}>❌ ERROS (Não importados):</h4>
                 <ul style={{ background: 'rgba(239,68,68,0.1)', padding: 12, borderRadius: 8, fontSize: 13, color: 'var(--accent-red)' }}>
-                  {importResult.erros.map((e, idx) => (
-                    <li key={idx} style={{ marginBottom: 4 }}>- Linha {e.linha}: {e.erro}</li>
+                  {resultadoImportacao.erros.map((e, idx) => (
+                    <li key={idx} style={{ marginBottom: 4 }}>• Linha {e.linha}: {e.erro}</li>
                   ))}
                 </ul>
               </div>
@@ -357,7 +769,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
           <div className="animate-fade">
             <div className="form-group mb-4">
               <label className="label">O que você deseja importar?</label>
-              <select className="input" value={tipo} onChange={e => { setTipo(e.target.value); setFile(null); setPreview([]); setLinhas([]); }}>
+              <select className="input" value={tipo} onChange={e => { setTipo(e.target.value); setFile(null); setPreview([]); setLinhasPreview([]); }}>
                 <option value="despesas">Despesas Regulares</option>
                 <option value="parcelamentos">Parcelamentos</option>
               </select>
@@ -379,16 +791,16 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
             </div>
 
             {errorMsg && (
-              <div className="alert alert-danger mb-4" style={{ fontSize: 13 }}>
+              <div className="alert alert-danger mb-4" style={{ fontSize: 13, padding: '12px', background: 'rgba(239,68,68,0.1)', color: 'var(--accent-red)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <AlertTriangle size={16} /> {errorMsg}
               </div>
             )}
 
             {preview.length > 0 && (
               <div className="mb-4">
-                <h4 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Prévia dos Dados ({linhas.length} linhas detectadas):</h4>
+                <h4 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Prévia dos Dados ({linhasPreview.length} linhas detectadas):</h4>
                 <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-                  <table style={{ width: '100%', fontSize: 12 }}>
+                  <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                     <thead style={{ background: 'var(--bg-secondary)' }}>
                       <tr>
                         {getHeaders().map(h => <th key={h} style={{ padding: 8, textAlign: 'left', fontWeight: 600 }}>{h}</th>)}
@@ -407,9 +819,19 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
             )}
 
             <div className="flex justify-end gap-2 mt-4">
-              <button className="btn btn-ghost" onClick={onClose} disabled={isImporting}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handleImport} disabled={!file || isImporting || linhas.length === 0}>
-                {isImporting ? <Loader2 size={16} className="spin" /> : `Importar ${linhas.length} registros`}
+              <button className="btn btn-ghost" onClick={onClose} disabled={importando}>Cancelar</button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleConfirmarImportacao} 
+                disabled={importando || linhasPreview.length === 0}
+              >
+                {importando ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 size={16} className="spin" /> Importando... aguarde
+                  </span>
+                ) : (
+                  `⬆ Importar ${linhasPreview.length} registro(s)`
+                )}
               </button>
             </div>
           </div>
