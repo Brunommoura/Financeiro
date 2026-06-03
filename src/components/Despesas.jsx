@@ -2,11 +2,12 @@ import { useState, useMemo } from 'react';
 import { Plus, Trash2, Edit2, Copy, Search, Settings, CreditCard, Loader2, Upload } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthKey } from '../utils/helpers';
 import { appwriteService } from '../services/appwriteService';
-import { COLLECTIONS } from '../lib/appwrite';
+import { COLLECTIONS, databases, DATABASE_ID, ID } from '../lib/appwrite';
 import ImportModal from './ImportModal';
+import { mostrarToast } from './Toast';
 
 const TIPOS = ['Fixa', 'Variável', 'Parcelada'];
-const PAGAMENTOS = ['Débito', 'Crédito', 'PIX', 'Dinheiro', 'Boleto'];
+const PAGAMENTOS = ['Dinheiro', 'PIX', 'Débito', 'Crédito', 'Transferência', 'Boleto'];
 const STATUS = ['Pago', 'Pendente'];
 
 export default function Despesas({ despesas, setDespesas, categories, setCategories, cartoes, user }) {
@@ -35,6 +36,10 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
 
   const [catForm, setCatForm] = useState({ name: '', color: '#EF4444' });
   const [editingCatId, setEditingCatId] = useState(null);
+
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isMassEditing, setIsMassEditing] = useState(false);
+  const [massEditForm, setMassEditForm] = useState({ categoria: '', cartaoId: '', pagamento: '', tipo: '' });
 
   const meses = useMemo(() => {
     const s = new Set(despesas.map(d => getMonthKey(d.data)));
@@ -213,10 +218,64 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     }
   };
 
+  const handleMassUpdate = async () => {
+    if (!massEditForm.categoria && !massEditForm.cartaoId && !massEditForm.pagamento && !massEditForm.tipo) {
+      alert("Selecione ao menos um campo para alterar");
+      return;
+    }
+
+    setIsMassEditing(true);
+    const updates = {};
+    if (massEditForm.categoria) updates.categoria = massEditForm.categoria;
+    if (massEditForm.tipo) updates.tipo = massEditForm.tipo;
+    if (massEditForm.pagamento) {
+      updates.formaPagamento = massEditForm.pagamento;
+      if (massEditForm.pagamento !== 'Crédito') {
+        updates.cartaoId = null;
+      }
+    }
+    if (massEditForm.cartaoId) {
+      updates.cartaoId = massEditForm.cartaoId;
+      updates.formaPagamento = 'Crédito'; // Força Crédito se selecionou cartão
+    }
+
+    try {
+      await Promise.all(selectedIds.map(id => appwriteService.atualizar(COLLECTIONS.DESPESAS, id, updates)));
+      
+      setDespesas(prev => prev.map(d => {
+        if (selectedIds.includes(d.id)) {
+          return { ...d, ...updates, pagamento: updates.formaPagamento || d.pagamento };
+        }
+        return d;
+      }));
+
+      mostrarToast(`✅ ${selectedIds.length} despesa(s) atualizada(s) com sucesso!`);
+      setSelectedIds([]);
+      setMassEditForm({ categoria: '', cartaoId: '', pagamento: '', tipo: '' });
+    } catch (e) {
+      console.error(e);
+      mostrarToast("Erro ao realizar atualização em massa.", "erro");
+    } finally {
+      setIsMassEditing(false);
+    }
+  };
+
+  const toggleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedIds(filtered.map(d => d.id));
+    } else {
+      setSelectedIds([]);
+    }
+  };
+
+  const toggleSelectRow = (id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
   const tipoBadge = { 'Fixa': 'badge-blue', 'Variável': 'badge-yellow', 'Parcelada': 'badge-purple' };
 
   // Funções do Gerenciador de Categorias
-  const handleSaveCategory = () => {
+  const handleSaveCategory = async () => {
     if (!catForm.name || catForm.name.length < 3) {
       alert("O nome da categoria deve ter pelo menos 3 caracteres.");
       return;
@@ -227,36 +286,56 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
       return;
     }
 
-    if (editingCatId) {
-      const oldCat = categories.expense.find(c => c.id === editingCatId);
-      if (oldCat.name !== catForm.name) {
-        setDespesas(prev => prev.map(d => d.categoria === oldCat.name ? { ...d, categoria: catForm.name } : d));
+    try {
+      if (editingCatId) {
+        await appwriteService.atualizar(COLLECTIONS.CATEGORIAS, editingCatId, { nome: catForm.name, cor: catForm.color });
+        
+        const oldCat = categories.expense.find(c => c.id === editingCatId);
+        if (oldCat.name !== catForm.name) {
+          setDespesas(prev => prev.map(d => d.categoria === oldCat.name ? { ...d, categoria: catForm.name } : d));
+        }
+        setCategories(prev => ({
+          ...prev,
+          expense: prev.expense.map(c => c.id === editingCatId ? { ...c, name: catForm.name, color: catForm.color } : c)
+        }));
+      } else {
+        const doc = await databases.createDocument(DATABASE_ID, COLLECTIONS.CATEGORIAS, ID.unique(), {
+          userId: user.$id,
+          tipo: 'despesa',
+          nome: catForm.name,
+          cor: catForm.color
+        });
+
+        setCategories(prev => ({
+          ...prev,
+          expense: [...prev.expense, { id: doc.$id, name: doc.nome, color: doc.cor }]
+        }));
       }
-      setCategories(prev => ({
-        ...prev,
-        expense: prev.expense.map(c => c.id === editingCatId ? { ...c, name: catForm.name, color: catForm.color } : c)
-      }));
-    } else {
-      setCategories(prev => ({
-        ...prev,
-        expense: [...prev.expense, { id: Date.now(), name: catForm.name, color: catForm.color }]
-      }));
+      setCatForm({ name: '', color: '#EF4444' });
+      setEditingCatId(null);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar categoria no banco de dados.');
     }
-    setCatForm({ name: '', color: '#EF4444' });
-    setEditingCatId(null);
   };
 
-  const handleDeleteCategory = (cat) => {
+  const handleDeleteCategory = async (cat) => {
     const inUse = despesas.filter(d => d.categoria === cat.name).length;
     if (inUse > 0) {
       alert(`Esta categoria está sendo usada em ${inUse} despesa(s). Não é possível excluir.`);
       return;
     }
     if (window.confirm(`Deseja excluir a categoria "${cat.name}"?`)) {
-      setCategories(prev => ({
-        ...prev,
-        expense: prev.expense.filter(c => c.id !== cat.id)
-      }));
+      try {
+        await appwriteService.deletar(COLLECTIONS.CATEGORIAS, cat.id);
+        setCategories(prev => ({
+          ...prev,
+          expense: prev.expense.filter(c => c.id !== cat.id)
+        }));
+      } catch (e) {
+        console.error(e);
+        alert('Erro ao excluir categoria do banco de dados.');
+      }
     }
   };
 
@@ -465,6 +544,11 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
           <table>
             <thead>
               <tr>
+                <th style={{ width: 40, textAlign: 'center' }}>
+                  <input type="checkbox" style={{ cursor: 'pointer', width: 16, height: 16 }} 
+                         checked={filtered.length > 0 && selectedIds.length === filtered.length}
+                         onChange={toggleSelectAll} />
+                </th>
                 <th>Data</th>
                 <th>Descrição</th>
                 <th>Categoria</th>
@@ -477,14 +561,19 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>Nenhum registro encontrado</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>Nenhum registro encontrado</td></tr>
               )}
               {filtered.map(d => {
                 const cartao = d.cartaoId ? cartoes.find(c => String(c.id) === String(d.cartaoId)) : null;
                 const color = getCategoryColor(d.categoria);
+                const isSelected = selectedIds.includes(d.id);
                 
                 return (
-                  <tr key={d.id} style={{ background: editingId === d.id ? 'rgba(239,68,68,0.05)' : 'transparent' }}>
+                  <tr key={d.id} style={{ background: isSelected ? 'rgba(59,130,246,0.1)' : (editingId === d.id ? 'rgba(239,68,68,0.05)' : 'transparent') }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <input type="checkbox" style={{ cursor: 'pointer', width: 16, height: 16 }} 
+                             checked={isSelected} onChange={() => toggleSelectRow(d.id)} />
+                    </td>
                     <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(d.data)}</td>
                     <td style={{ fontWeight: 500 }}>
                       {d.descricao}
@@ -535,7 +624,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6} style={{ fontWeight: 700, paddingTop: 12, borderTop: '2px solid var(--border)' }}>Total</td>
+                <td colSpan={7} style={{ fontWeight: 700, paddingTop: 12, borderTop: '2px solid var(--border)' }}>Total</td>
                 <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--accent-red)', fontSize: 15, borderTop: '2px solid var(--border)' }}>{formatCurrency(total)}</td>
                 <td style={{ borderTop: '2px solid var(--border)' }}></td>
               </tr>
@@ -543,6 +632,49 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
           </table>
         </div>
       </div>
+
+      {/* Barra de Ações em Massa */}
+      {selectedIds.length > 0 && (
+        <div className="animate-slide-up" style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, 
+          background: 'var(--bg-card)', padding: '16px 24px', 
+          boxShadow: '0 -4px 12px rgba(0,0,0,0.1)', zIndex: 100, 
+          display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'center',
+          borderTop: '1px solid var(--border)', flexWrap: 'wrap'
+        }}>
+          <div style={{ fontWeight: 600, color: 'var(--accent-blue)', marginRight: 12 }}>
+            [{selectedIds.length} despesa(s) selecionada(s)]
+          </div>
+
+          <select className="input" style={{ width: 'auto', minWidth: 140 }} value={massEditForm.categoria} onChange={e => setMassEditForm({...massEditForm, categoria: e.target.value})}>
+            <option value="">Categoria ▼</option>
+            {categories.expense.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+          </select>
+
+          <select className="input" style={{ width: 'auto', minWidth: 140 }} value={massEditForm.cartaoId} onChange={e => setMassEditForm({...massEditForm, cartaoId: e.target.value})}>
+            <option value="">Cartão ▼</option>
+            {cartoes.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+
+          <select className="input" style={{ width: 'auto', minWidth: 160 }} value={massEditForm.pagamento} onChange={e => setMassEditForm({...massEditForm, pagamento: e.target.value})}>
+            <option value="">Forma de Pgto ▼</option>
+            {PAGAMENTOS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+
+          <select className="input" style={{ width: 'auto', minWidth: 120 }} value={massEditForm.tipo} onChange={e => setMassEditForm({...massEditForm, tipo: e.target.value})}>
+            <option value="">Tipo ▼</option>
+            {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+
+          <button className="btn btn-primary" onClick={handleMassUpdate} disabled={isMassEditing}>
+            {isMassEditing ? <Loader2 size={16} className="spin" /> : '✅ Aplicar'}
+          </button>
+          
+          <button className="btn btn-ghost" onClick={() => { setSelectedIds([]); setMassEditForm({ categoria: '', cartaoId: '', pagamento: '', tipo: '' }); }} disabled={isMassEditing}>
+            ✕ Cancelar
+          </button>
+        </div>
+      )}
     </div>
   );
 }

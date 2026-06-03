@@ -96,7 +96,7 @@ const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, v
 };
 
 export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, setSelectedMonth, availableMonths }) {
-  const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, patrimonioHistorico, aproveitamentoMensal } = data;
+  const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, aproveitamentoMensal } = data;
 
   const [userName, setUserName] = useState('');
   const [userId, setUserId] = useState(null);
@@ -279,6 +279,28 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
 
   // Próximos parcelamentos
   const proxParcelamentos = useMemo(() => calcNextInstallments(parcelamentos, despesas), [parcelamentos, despesas]);
+
+  // Patrimônio histórico calculado (estimativa retroativa baseada no saldo mensal)
+  const patrimonioHistorico = useMemo(() => {
+    if (!evolucaoData.length) return [];
+    
+    let atualBruto = patrimonio.reduce((s, p) => s + p.valorAtual, 0);
+    let atualDividas = dividasList.reduce((s, d) => s + d.saldoDevedor, 0);
+    let atualLiquido = atualBruto - atualDividas;
+
+    const hist = [];
+    for (let i = evolucaoData.length - 1; i >= 0; i--) {
+      const e = evolucaoData[i];
+      hist.unshift({
+        mes: e.mes,
+        patrimonio: atualBruto,
+        liquido: atualLiquido
+      });
+      atualBruto -= e.saldo > 0 ? e.saldo : 0;
+      atualLiquido -= e.saldo;
+    }
+    return hist;
+  }, [evolucaoData, patrimonio, dividasList]);
 
   // Alertas
   const alerts = useMemo(() => {

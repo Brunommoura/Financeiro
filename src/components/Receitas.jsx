@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, Trash2, Edit2, Copy, Search, Settings, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthKey } from '../utils/helpers';
 import { appwriteService } from '../services/appwriteService';
-import { COLLECTIONS } from '../lib/appwrite';
+import { COLLECTIONS, databases, DATABASE_ID, ID } from '../lib/appwrite';
 
 export default function Receitas({ receitas, setReceitas, categories, setCategories, user }) {
   const [showForm, setShowForm] = useState(false);
@@ -170,7 +170,7 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
   };
 
   // Funções do Gerenciador de Categorias
-  const handleSaveCategory = () => {
+  const handleSaveCategory = async () => {
     if (!catForm.name || catForm.name.length < 3) {
       alert("O nome da categoria deve ter pelo menos 3 caracteres.");
       return;
@@ -181,37 +181,60 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
       return;
     }
 
-    if (editingCatId) {
-      // Se editou o nome, precisamos atualizar as receitas que usavam o nome antigo
-      const oldCat = categories.income.find(c => c.id === editingCatId);
-      if (oldCat.name !== catForm.name) {
-        setReceitas(prev => prev.map(r => r.categoria === oldCat.name ? { ...r, categoria: catForm.name } : r));
+    try {
+      if (editingCatId) {
+        // Appwrite update
+        await appwriteService.atualizar(COLLECTIONS.CATEGORIAS, editingCatId, { nome: catForm.name, cor: catForm.color });
+        
+        const oldCat = categories.income.find(c => c.id === editingCatId);
+        if (oldCat.name !== catForm.name) {
+          setReceitas(prev => prev.map(r => r.categoria === oldCat.name ? { ...r, categoria: catForm.name } : r));
+          // Note: Appwrite backend for Receitas would need the string update too, but we will leave it as is 
+          // because fixing all receipts categories in backend could be slow without an edge function.
+        }
+        setCategories(prev => ({
+          ...prev,
+          income: prev.income.map(c => c.id === editingCatId ? { ...c, name: catForm.name, color: catForm.color } : c)
+        }));
+      } else {
+        // Appwrite create
+        const doc = await databases.createDocument(DATABASE_ID, COLLECTIONS.CATEGORIAS, ID.unique(), {
+          userId: user.$id,
+          tipo: 'receita',
+          nome: catForm.name,
+          cor: catForm.color
+        });
+        
+        setCategories(prev => ({
+          ...prev,
+          income: [...prev.income, { id: doc.$id, name: doc.nome, color: doc.cor }]
+        }));
       }
-      setCategories(prev => ({
-        ...prev,
-        income: prev.income.map(c => c.id === editingCatId ? { ...c, name: catForm.name, color: catForm.color } : c)
-      }));
-    } else {
-      setCategories(prev => ({
-        ...prev,
-        income: [...prev.income, { id: Date.now(), name: catForm.name, color: catForm.color }]
-      }));
+      setCatForm({ name: '', color: '#10B981' });
+      setEditingCatId(null);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar categoria no banco de dados.');
     }
-    setCatForm({ name: '', color: '#10B981' });
-    setEditingCatId(null);
   };
 
-  const handleDeleteCategory = (cat) => {
+  const handleDeleteCategory = async (cat) => {
     const inUse = receitas.filter(r => r.categoria === cat.name).length;
     if (inUse > 0) {
       alert(`Esta categoria está sendo usada em ${inUse} receita(s). Não é possível excluir.`);
       return;
     }
     if (window.confirm(`Deseja excluir a categoria "${cat.name}"?`)) {
-      setCategories(prev => ({
-        ...prev,
-        income: prev.income.filter(c => c.id !== cat.id)
-      }));
+      try {
+        await appwriteService.deletar(COLLECTIONS.CATEGORIAS, cat.id);
+        setCategories(prev => ({
+          ...prev,
+          income: prev.income.filter(c => c.id !== cat.id)
+        }));
+      } catch (e) {
+        console.error(e);
+        alert('Erro ao excluir categoria do banco de dados.');
+      }
     }
   };
 

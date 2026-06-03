@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Plus, Trash2, CheckCircle, Clock, Circle, Edit2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine } from 'recharts';
+import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
+import { mostrarToast } from './Toast';
 
 const CATEGORIAS = ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro'];
 const PRIORIDADES = ['Alta', 'Média', 'Baixa'];
@@ -10,7 +12,9 @@ const priorColor = { Alta: '#ef4444', Média: '#f59e0b', Baixa: '#10b981' };
 const statusIcon = { Pendente: Circle, 'Em andamento': Clock, Concluída: CheckCircle };
 const statusColor = { Pendente: '#64748b', 'Em andamento': '#f59e0b', Concluída: '#10b981' };
 
-export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos, aproveitamentoMensal = [], setAproveitamentoMensal }) {
+export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos, aproveitamentoMensal, setAproveitamentoMensal, user }) {
+  const [carregando, setCarregando] = useState(true);
+
   const [showForm, setShowForm] = useState(false);
   const [showAprovForm, setShowAprovForm] = useState(false);
   const [aprovFilter, setAprovFilter] = useState(6);
@@ -24,14 +28,227 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
 
   const hoje = new Date().toISOString().split('T')[0];
 
-  const handleAdd = () => {
-    if (!form.titulo) return;
-    setTarefas(prev => [...prev, { ...form, id: Date.now(), tempoEstimado: parseInt(form.tempoEstimado) || 0, tempoReal: parseInt(form.tempoReal) || 0 }]);
-    setForm({ titulo: '', categoria: 'Trabalho', prioridade: 'Média', status: 'Pendente', tempoEstimado: '', tempoReal: '', data: hoje });
-    setShowForm(false);
+  useEffect(() => {
+    const temDadosFalsosTarefas = tarefas.some(t => !t.$id);
+    const temDadosFalsosHabitos = habitos.some(h => !h.$id);
+    const temDadosFalsosAprov = aproveitamentoMensal.some(a => !a.$id);
+    
+    if (temDadosFalsosTarefas || temDadosFalsosHabitos || temDadosFalsosAprov) {
+      console.warn('⚠️ Dados hardcoded detectados em produtividade — limpando e buscando do Appwrite');
+      if (temDadosFalsosTarefas) setTarefas([]);
+      if (temDadosFalsosHabitos) setHabitos([]);
+      if (temDadosFalsosAprov) setAproveitamentoMensal([]);
+      if (user?.$id) carregarDados(user.$id);
+    }
+  }, [tarefas, habitos, aproveitamentoMensal, user]);
+
+  useEffect(() => {
+    if (user?.$id) {
+      carregarDados(user.$id);
+    }
+  }, [user]);
+
+  const carregarDados = async (userId) => {
+    setCarregando(true);
+    try {
+      const [resProd, resAprov] = await Promise.all([
+        databases.listDocuments(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, [Query.equal('userId', userId), Query.limit(500)]),
+        databases.listDocuments(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, [Query.equal('userId', userId), Query.limit(100)])
+      ]);
+
+      const todasTarefas = [];
+      const todosHabitos = [];
+
+      resProd.documents.forEach(doc => {
+        // Appwrite fields we map back to our state
+        if (doc.tipoRegistro === 'habito') {
+          todosHabitos.push({
+            ...doc,
+            id: doc.$id,
+            nome: doc.titulo,
+            streak: doc.streak || 0,
+            meta: doc.meta || 30,
+            completadoHoje: doc.data === hoje
+          });
+        } else {
+          todasTarefas.push({
+            ...doc,
+            id: doc.$id,
+            titulo: doc.titulo,
+            categoria: doc.categoria || 'Trabalho',
+            prioridade: doc.prioridade || 'Média',
+            status: doc.status || 'Pendente',
+            tempoEstimado: doc.tempoEstimado || 0,
+            tempoReal: doc.tempoReal || 0,
+            data: doc.data || hoje
+          });
+        }
+      });
+
+      setTarefas(todasTarefas);
+      setHabitos(todosHabitos);
+      
+      const mappedAprov = resAprov.documents.map(d => ({
+        ...d,
+        id: d.$id,
+        mesAno: d.mesAno,
+        aproveitamento: d.aproveitamento,
+        observacoes: d.observacoes || ''
+      }));
+      setAproveitamentoMensal(mappedAprov);
+
+    } catch (error) {
+      console.error('Erro ao buscar produtividade:', error);
+      mostrarToast('Erro ao carregar dados de produtividade.', 'erro');
+    } finally {
+      setCarregando(false);
+    }
   };
 
-  const handleAddAprov = () => {
+  const handleAdd = async () => {
+    if (!form.titulo) return;
+    try {
+      console.log('📤 [Appwrite] Criando tarefa:', form.titulo);
+      const doc = await databases.createDocument(
+        DATABASE_ID,
+        COLLECTIONS.PRODUTIVIDADE,
+        ID.unique(),
+        {
+          userId: user.$id,
+          tipoRegistro: 'tarefa',
+          titulo: form.titulo,
+          categoria: form.categoria,
+          prioridade: form.prioridade,
+          status: form.status,
+          data: form.data,
+          tempoEstimado: parseInt(form.tempoEstimado) || 0,
+          tempoReal: parseInt(form.tempoReal) || 0
+        },
+        [
+          Permission.read(Role.user(user.$id)),
+          Permission.update(Role.user(user.$id)),
+          Permission.delete(Role.user(user.$id))
+        ]
+      );
+      console.log('✅ [Appwrite] Tarefa criada:', doc.$id);
+      setTarefas(prev => [...prev, { 
+        ...doc, 
+        id: doc.$id,
+        titulo: doc.titulo,
+        categoria: doc.categoria,
+        prioridade: doc.prioridade,
+        status: doc.status,
+        data: doc.data,
+        tempoEstimado: doc.tempoEstimado,
+        tempoReal: doc.tempoReal
+      }]);
+      setForm({ titulo: '', categoria: 'Trabalho', prioridade: 'Média', status: 'Pendente', tempoEstimado: '', tempoReal: '', data: hoje });
+      setShowForm(false);
+      mostrarToast('✅ Tarefa salva com sucesso!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Falha ao criar tarefa:', error);
+      mostrarToast('❌ Erro ao salvar tarefa.', 'erro');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      console.log('📤 [Appwrite] Excluindo tarefa:', id);
+      await databases.deleteDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id);
+      console.log('✅ [Appwrite] Tarefa excluída:', id);
+      setTarefas(prev => prev.filter(t => t.id !== id));
+      mostrarToast('🗑️ Tarefa excluída!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao excluir tarefa:', error);
+      mostrarToast('❌ Erro ao excluir tarefa.', 'erro');
+    }
+  };
+
+  const cycleStatus = async (id) => {
+    const tarefa = tarefas.find(t => t.id === id);
+    if (!tarefa) return;
+    const next = { Pendente: 'Em andamento', 'Em andamento': 'Concluída', Concluída: 'Pendente' };
+    const newStatus = next[tarefa.status];
+    
+    try {
+      console.log('📤 [Appwrite] Atualizando status tarefa:', id, newStatus);
+      const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id, { status: newStatus });
+      console.log('✅ [Appwrite] Status atualizado:', id);
+      setTarefas(prev => prev.map(t => t.id === id ? { ...t, status: doc.status } : t));
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao atualizar status:', error);
+      mostrarToast('❌ Erro ao atualizar status.', 'erro');
+    }
+  };
+
+  const [novoHabito, setNovoHabito] = useState('');
+  const addHabito = async () => {
+    if (!novoHabito.trim()) return;
+    try {
+      console.log('📤 [Appwrite] Criando hábito:', novoHabito);
+      const doc = await databases.createDocument(
+        DATABASE_ID,
+        COLLECTIONS.PRODUTIVIDADE,
+        ID.unique(),
+        {
+          userId: user.$id,
+          tipoRegistro: 'habito',
+          titulo: novoHabito,
+          streak: 0,
+          meta: 30,
+          data: null
+        },
+        [
+          Permission.read(Role.user(user.$id)),
+          Permission.update(Role.user(user.$id)),
+          Permission.delete(Role.user(user.$id))
+        ]
+      );
+      console.log('✅ [Appwrite] Hábito criado:', doc.$id);
+      setHabitos(prev => [...prev, { ...doc, id: doc.$id, nome: doc.titulo, streak: doc.streak, meta: doc.meta, completadoHoje: false }]);
+      setNovoHabito('');
+      mostrarToast('✅ Hábito salvo com sucesso!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao criar hábito:', error);
+      mostrarToast('❌ Erro ao salvar hábito.', 'erro');
+    }
+  };
+
+  const toggleHabito = async (id) => {
+    const habito = habitos.find(h => h.id === id);
+    if (!habito) return;
+    const completadoHoje = !habito.completadoHoje;
+    const streakNovo = completadoHoje ? habito.streak + 1 : Math.max(0, habito.streak - 1);
+    const dataUpdate = completadoHoje ? hoje : null;
+
+    try {
+      console.log('📤 [Appwrite] Atualizando hábito:', id);
+      const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id, {
+        streak: streakNovo,
+        data: dataUpdate
+      });
+      console.log('✅ [Appwrite] Hábito atualizado:', id);
+      setHabitos(prev => prev.map(h => h.id === id ? { ...h, completadoHoje, streak: doc.streak } : h));
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao atualizar hábito:', error);
+      mostrarToast('❌ Erro ao atualizar hábito.', 'erro');
+    }
+  };
+
+  const deleteHabito = async (id) => {
+    try {
+      console.log('📤 [Appwrite] Excluindo hábito:', id);
+      await databases.deleteDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id);
+      console.log('✅ [Appwrite] Hábito excluído:', id);
+      setHabitos(prev => prev.filter(x => x.id !== id));
+      mostrarToast('🗑️ Hábito excluído!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao excluir hábito:', error);
+      mostrarToast('❌ Erro ao excluir hábito.', 'erro');
+    }
+  };
+
+  const handleAddAprov = async () => {
     if (!aprovForm.mesAno) return;
     const val = parseFloat(aprovForm.aproveitamento);
     if (isNaN(val) || val < 0 || val > 100) {
@@ -43,50 +260,65 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
       return;
     }
 
-    if (aprovForm.id) {
-      setAproveitamentoMensal(prev => prev.map(a => a.id === aprovForm.id ? { ...aprovForm, aproveitamento: val } : a));
-    } else {
-      setAproveitamentoMensal(prev => [...prev, { ...aprovForm, id: Date.now(), aproveitamento: val }]);
+    try {
+      if (aprovForm.id) {
+        console.log('📤 [Appwrite] Atualizando aprov:', aprovForm.id);
+        const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, aprovForm.id, {
+          mesAno: aprovForm.mesAno,
+          aproveitamento: val,
+          observacoes: aprovForm.observacoes || null
+        });
+        console.log('✅ [Appwrite] Aprov atualizado:', doc.$id);
+        setAproveitamentoMensal(prev => prev.map(a => a.id === aprovForm.id ? { ...doc, id: doc.$id } : a));
+        mostrarToast('✅ Aproveitamento atualizado!');
+      } else {
+        console.log('📤 [Appwrite] Criando aprov:', aprovForm.mesAno);
+        const doc = await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.APROVEITAMENTO,
+          ID.unique(),
+          {
+            userId: user.$id,
+            mesAno: aprovForm.mesAno,
+            aproveitamento: val,
+            observacoes: aprovForm.observacoes || null
+          },
+          [
+            Permission.read(Role.user(user.$id)),
+            Permission.update(Role.user(user.$id)),
+            Permission.delete(Role.user(user.$id))
+          ]
+        );
+        console.log('✅ [Appwrite] Aprov criado:', doc.$id);
+        setAproveitamentoMensal(prev => [...prev, { ...doc, id: doc.$id }]);
+        mostrarToast('✅ Aproveitamento salvo com sucesso!');
+      }
+      setAprovForm({ id: null, mesAno: '', aproveitamento: '', observacoes: '' });
+      setShowAprovForm(false);
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro em Aproveitamento:', error);
+      mostrarToast('❌ Erro ao salvar aproveitamento.', 'erro');
     }
-    
-    setAprovForm({ id: null, mesAno: '', aproveitamento: '', observacoes: '' });
-    setShowAprovForm(false);
   };
 
   const handleEditAprov = (item) => {
-    setAprovForm(item);
+    setAprovForm({ ...item, aproveitamento: item.aproveitamento.toString() });
     setShowAprovForm(true);
   };
 
-  const handleDeleteAprov = (id) => {
+  const handleDeleteAprov = async (id) => {
     if (window.confirm('Excluir este registro?')) {
-      setAproveitamentoMensal(prev => prev.filter(a => a.id !== id));
+      try {
+        console.log('📤 [Appwrite] Excluindo aprov:', id);
+        await databases.deleteDocument(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, id);
+        console.log('✅ [Appwrite] Aprov excluído:', id);
+        setAproveitamentoMensal(prev => prev.filter(a => a.id !== id));
+        mostrarToast('🗑️ Registro excluído!');
+      } catch (error) {
+        console.error('❌ [Appwrite] Erro ao excluir aprov:', error);
+        mostrarToast('❌ Erro ao excluir registro.', 'erro');
+      }
     }
-  };
-
-  const handleDelete = (id) => setTarefas(prev => prev.filter(t => t.id !== id));
-
-  const cycleStatus = (id) => {
-    setTarefas(prev => prev.map(t => {
-      if (t.id !== id) return t;
-      const next = { Pendente: 'Em andamento', 'Em andamento': 'Concluída', Concluída: 'Pendente' };
-      return { ...t, status: next[t.status] };
-    }));
-  };
-
-  const toggleHabito = (id) => {
-    setHabitos(prev => prev.map(h => {
-      if (h.id !== id) return h;
-      const completadoHoje = !h.completadoHoje;
-      return { ...h, completadoHoje, streak: completadoHoje ? h.streak + 1 : Math.max(0, h.streak - 1) };
-    }));
-  };
-
-  const [novoHabito, setNovoHabito] = useState('');
-  const addHabito = () => {
-    if (!novoHabito.trim()) return;
-    setHabitos(prev => [...prev, { id: Date.now(), nome: novoHabito, streak: 0, meta: 30, completadoHoje: false }]);
-    setNovoHabito('');
   };
 
   const filtered = useMemo(() => {
@@ -95,22 +327,22 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     return tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
   }, [tarefas, activeFilter, hoje]);
 
-  // Métricas
   const concluidas = tarefas.filter(t => t.status === 'Concluída');
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
   const streakMax = habitos.reduce((max, h) => Math.max(max, h.streak), 0);
   const tempoTotal = concluidas.reduce((s, t) => s + (t.tempoReal || t.tempoEstimado), 0);
   const hojeCompletas = tarefas.filter(t => t.data === hoje && t.status === 'Concluída').length;
 
-  // Chart data por categoria
   const catData = useMemo(() => CATEGORIAS.map(cat => ({
     name: cat,
     concluidas: tarefas.filter(t => t.categoria === cat && t.status === 'Concluída').length,
     pendentes: tarefas.filter(t => t.categoria === cat && t.status !== 'Concluída').length,
   })), [tarefas]);
 
-  // Aproveitamento Mensal
-  const aprovData = useMemo(() => [...aproveitamentoMensal].sort((a, b) => a.id - b.id), [aproveitamentoMensal]);
+  const aprovData = useMemo(() => [...aproveitamentoMensal].sort((a, b) => {
+    // Ordenar cronologicamente se possível, ou por ID
+    return a.id > b.id ? 1 : -1;
+  }), [aproveitamentoMensal]);
   
   const aprovStats = useMemo(() => {
     if (!aprovData.length) return null;
@@ -136,6 +368,15 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     if (!filteredAprovData.length) return 0;
     return filteredAprovData.reduce((s, a) => s + a.aproveitamento, 0) / filteredAprovData.length;
   }, [filteredAprovData]);
+
+  if (carregando) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3" style={{ borderBottomColor: 'transparent' }} />
+        <span className="text-muted">Carregando produtividade...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade">
@@ -207,7 +448,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
                 <span style={{ fontSize: 12, color: 'var(--accent-yellow)', fontWeight: 700 }}>🔥 {h.streak}</span>
                 <button
                   className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => setHabitos(prev => prev.filter(x => x.id !== h.id))}
+                  onClick={() => deleteHabito(h.id)}
                 >
                   <Trash2 size={12} color="var(--accent-red)" />
                 </button>

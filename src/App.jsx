@@ -10,12 +10,23 @@ import Dividas from './components/Dividas';
 import Metas from './components/Metas';
 import Produtividade from './components/Produtividade';
 import Feedback from './components/Feedback';
-import { sampleData } from './data/sampleData';
+import ToastContainer from './components/Toast';
+import StatusConexao from './components/StatusConexao';
+import { initVerificarPersistencia } from './utils/verificarPersistencia';
+
 import { calcFinancialScore, getAvailableMonths } from './utils/helpers';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './components/Auth/LoginPage';
 import { appwriteService } from './services/appwriteService';
 import { COLLECTIONS } from './lib/appwrite';
+
+/*
+  REGRAS DE PERSISTÊNCIA (Appwrite First)
+  1. O estado local (useState) é apenas um reflexo do Appwrite.
+  2. Toda operação de salvar/editar/excluir deve chamar o Appwrite PRIMEIRO.
+  3. Não utilizar localStorage para armazenar dados críticos (apenas configurações visuais).
+  4. O ID dos documentos deve ser sempre o ID gerado pelo Appwrite ($id).
+*/
 
 function AppContent() {
   const { user, loading, logout } = useAuth();
@@ -38,8 +49,8 @@ function FinanceApp({ user, logout }) {
   const [selectedMonth, setSelectedMonth] = useState('');
   const [appLoading, setAppLoading] = useState(true);
 
-  // States
-  const [categories, setCategories] = useState([]);
+  // Estados sempre começam vazios! (Sem sampleData)
+  const [categories, setCategories] = useState({ income: [], expense: [] });
   const [cartoes, setCartoes] = useState([]);
   const [receitas, setReceitas] = useState([]);
   const [despesas, setDespesas] = useState([]);
@@ -47,39 +58,50 @@ function FinanceApp({ user, logout }) {
   const [patrimonio, setPatrimonio] = useState([]);
   const [dividasList, setDividasList] = useState([]);
   const [metas, setMetas] = useState([]);
-  const [tarefas, setTarefas] = useState(sampleData.tarefas);
-  const [habitos, setHabitos] = useState(sampleData.habitos);
-  const [patrimonioHistorico] = useState(sampleData.patrimonioHistorico);
-  const [aproveitamentoMensal, setAproveitamentoMensal] = useState(sampleData.aproveitamentoMensal);
-  const [receitasDespesasMensais] = useState(sampleData.receitasDespesasMensais);
+  const [tarefas, setTarefas] = useState([]);
+  const [habitos, setHabitos] = useState([]);
+  const [aproveitamentoMensal, setAproveitamentoMensal] = useState([]);
+  
+  // Arrays vazios para evitar quebra do Dashboard antes da sua atualização
+  const patrimonioHistorico = [];
+  const receitasDespesasMensais = [];
 
-  const STORAGE_KEY = `financepro_local_${user.$id}`;
+  // Iniciar checklist global
+  useEffect(() => {
+    initVerificarPersistencia(user.$id);
+  }, [user.$id]);
 
   useEffect(() => {
     const carregarDados = async () => {
       setAppLoading(true);
       try {
-        // Carregar dados locais (temporário para coleções não migradas 100%)
-        const localData = localStorage.getItem(STORAGE_KEY);
-        if (localData) {
-          const parsed = JSON.parse(localData);
-          if (parsed.categories) setCategories(parsed.categories);
-          if (parsed.tarefas) setTarefas(parsed.tarefas);
-          if (parsed.habitos) setHabitos(parsed.habitos);
-        }
-
-        // Carregar do Appwrite
-        const [rec, desp, parc] = await Promise.all([
+        // Carregar receitas, despesas, parcelamentos e categorias do Appwrite
+        const [rec, desp, parc, cat] = await Promise.all([
           appwriteService.listar(COLLECTIONS.RECEITAS, user.$id),
           appwriteService.listar(COLLECTIONS.DESPESAS, user.$id),
-          appwriteService.listar(COLLECTIONS.PARCELAMENTOS, user.$id)
+          appwriteService.listar(COLLECTIONS.PARCELAMENTOS, user.$id),
+          appwriteService.listar(COLLECTIONS.CATEGORIAS, user.$id)
         ]);
 
         setReceitas(rec);
         setDespesas(desp);
         setParcelamentos(parc);
+
+        // Mapear categorias customizadas
+        const inc = [];
+        const exp = [];
+        cat.forEach(c => {
+          if (c.tipo === 'receita') inc.push({ id: c.$id, name: c.nome, color: c.cor });
+          else exp.push({ id: c.$id, name: c.nome, color: c.cor });
+        });
+
+        // Valores default caso o usuário não tenha categorias
+        if (inc.length === 0) inc.push({ id: 'default1', name: 'Salário', color: '#10B981' });
+        if (exp.length === 0) exp.push({ id: 'default2', name: 'Alimentação', color: '#EF4444' });
+
+        setCategories({ income: inc, expense: exp });
       } catch (error) {
-        console.error("Erro ao carregar dados do Appwrite:", error);
+        console.error("Erro ao carregar dados centrais do Appwrite:", error);
       } finally {
         setAppLoading(false);
       }
@@ -88,20 +110,11 @@ function FinanceApp({ user, logout }) {
     carregarDados();
   }, [user.$id]);
 
-  // Apply theme
+  // Persistir o tema visual
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('financepro_theme', theme);
   }, [theme]);
-
-  // Persist non-Appwrite data locally
-  useEffect(() => {
-    if (!appLoading) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        categories, cartoes, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
-      }));
-    }
-  }, [categories, cartoes, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais, appLoading, STORAGE_KEY]);
 
   // Available months
   const availableMonths = useMemo(() => getAvailableMonths(receitas, despesas), [receitas, despesas]);
@@ -149,7 +162,7 @@ function FinanceApp({ user, logout }) {
       case 'metas':
         return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} user={user} />;
       case 'produtividade':
-        return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} />;
+        return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} user={user} />;
       case 'feedback':
         return <Feedback user={user} />;
       default:
@@ -178,6 +191,9 @@ function FinanceApp({ user, logout }) {
           </button>
         </div>
       </main>
+      
+      <ToastContainer />
+      <StatusConexao />
     </div>
   );
 }
