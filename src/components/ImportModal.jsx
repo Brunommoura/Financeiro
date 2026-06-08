@@ -114,38 +114,45 @@ const encontrarCartao = (cartoes, nomeNaPlanilha) => {
 };
 
 const salvarDespesaSegura = async (dados, userId) => {
-  try {
+  const tentarSalvar = async (dadosTentativa) => {
     return await databases.createDocument(
       DATABASE_ID,
       COLLECTIONS.DESPESAS,
       ID.unique(),
-      dados,
+      dadosTentativa,
       [
         Permission.read(Role.user(userId)),
         Permission.update(Role.user(userId)),
         Permission.delete(Role.user(userId))
       ]
     );
-  } catch (error) {
-    if (
-      error.message?.includes('dataVencimentoCartao') ||
-      error.message?.includes('Unknown attribute')
-    ) {
-      console.warn('⚠️ Atributo dataVencimentoCartao não existe na collection — importando sem ele');
-      const dadosSemVencimento = { ...dados };
-      delete dadosSemVencimento.dataVencimentoCartao;
+  };
 
-      return await databases.createDocument(
-        DATABASE_ID,
-        COLLECTIONS.DESPESAS,
-        ID.unique(),
-        dadosSemVencimento,
-        [
-          Permission.read(Role.user(userId)),
-          Permission.update(Role.user(userId)),
-          Permission.delete(Role.user(userId))
-        ]
-      );
+  try {
+    return await tentarSalvar(dados);
+  } catch (error) {
+    // Extrair nome do atributo desconhecido da mensagem de erro
+    // Ex: "Unknown attribute: "origem"" ou "Unknown attribute: "dataVencimentoCartao""
+    const match = error.message?.match(/Unknown attribute: "([^"]+)"/);
+    if (match) {
+      const atributoProblematico = match[1];
+      console.warn(`⚠️ Atributo "${atributoProblematico}" não existe na collection — tentando sem ele`);
+      const dadosSem = { ...dados };
+      delete dadosSem[atributoProblematico];
+      try {
+        return await tentarSalvar(dadosSem);
+      } catch (error2) {
+        // Se ainda der Unknown attribute, tentar remover mais um
+        const match2 = error2.message?.match(/Unknown attribute: "([^"]+)"/);
+        if (match2) {
+          const atributo2 = match2[1];
+          console.warn(`⚠️ Atributo "${atributo2}" também não existe — tentando sem ele`);
+          const dadosSem2 = { ...dadosSem };
+          delete dadosSem2[atributo2];
+          return await tentarSalvar(dadosSem2);
+        }
+        throw error2;
+      }
     }
     throw error;
   }
@@ -524,7 +531,6 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
           categoria: String(categoriaRaw || 'Outros').trim(),
           valor,
           status: statusNorm,
-          origem: 'importacao',
           createdAt: new Date().toISOString()
         };
 
@@ -646,7 +652,6 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
           categoria: String(categoria).trim(),
           parcelasPagas: 0,
           status: 'Ativo',
-          origem: 'importacao',
           createdAt: new Date().toISOString()
         };
         
@@ -685,7 +690,6 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
             valor: valorEstaParcela,
             parcelamentoId: parcelamento.$id,
             status: 'Pendente',
-            origem: 'parcelamento',
             createdAt: new Date().toISOString()
           };
 
@@ -710,16 +714,46 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
   const recarregarDespesas = async () => {
     if (!setDespesas) return;
     try {
-      const response = await databases.listDocuments(
-        DATABASE_ID,
-        COLLECTIONS.DESPESAS,
-        [
-          Query.equal('userId', user.$id),
-          Query.orderDesc('data'),
-          Query.limit(500)
-        ]
-      );
-      setDespesas(response.documents);
+      // Paginação completa — mesma lógica do App.jsx para garantir consistência
+      let todos = [];
+      let offset = 0;
+      const batchSize = 100;
+      let totalServidor = null;
+
+      while (true) {
+        const response = await databases.listDocuments(
+          DATABASE_ID,
+          COLLECTIONS.DESPESAS,
+          [
+            Query.equal('userId', user.$id),
+            Query.limit(batchSize),
+            Query.offset(offset)
+          ]
+        );
+
+        const normalizados = response.documents.map(doc => {
+          // Normalizar data não-ISO (segurança)
+          if (doc.data && !/^\d{4}-\d{2}-\d{2}T/.test(doc.data)) {
+            try {
+              if (String(doc.data).includes('/')) {
+                const [dia, mes, ano] = String(doc.data).split('/');
+                const anoFull = ano.length === 2 ? '20' + ano : ano;
+                doc = { ...doc, data: new Date(parseInt(anoFull), parseInt(mes) - 1, parseInt(dia), 12, 0, 0).toISOString() };
+              }
+            } catch (e) { /* ignorar */ }
+          }
+          return { ...doc, id: doc.$id };
+        });
+
+        todos = [...todos, ...normalizados];
+
+        if (totalServidor === null) totalServidor = response.total;
+        if (todos.length >= totalServidor || response.documents.length < batchSize) break;
+        offset += batchSize;
+      }
+
+      // setDespesas no App.jsx já deduplica por $id — seguro chamar diretamente
+      setDespesas(todos);
     } catch (error) {
       console.error('Erro ao recarregar despesas:', error);
     }
@@ -728,16 +762,31 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
   const recarregarParcelamentos = async () => {
     if (!setParcelamentos) return;
     try {
-      const response = await databases.listDocuments(
-        DATABASE_ID,
-        COLLECTIONS.PARCELAMENTOS,
-        [
-          Query.equal('userId', user.$id),
-          Query.orderDesc('createdAt'),
-          Query.limit(200)
-        ]
-      );
-      setParcelamentos(response.documents);
+      let todos = [];
+      let offset = 0;
+      const batchSize = 100;
+      let totalServidor = null;
+
+      while (true) {
+        const response = await databases.listDocuments(
+          DATABASE_ID,
+          COLLECTIONS.PARCELAMENTOS,
+          [
+            Query.equal('userId', user.$id),
+            Query.limit(batchSize),
+            Query.offset(offset)
+          ]
+        );
+
+        const normalizados = response.documents.map(doc => ({ ...doc, id: doc.$id }));
+        todos = [...todos, ...normalizados];
+
+        if (totalServidor === null) totalServidor = response.total;
+        if (todos.length >= totalServidor || response.documents.length < batchSize) break;
+        offset += batchSize;
+      }
+
+      setParcelamentos(todos);
     } catch (error) {
       console.error('Erro ao recarregar parcelamentos:', error);
     }

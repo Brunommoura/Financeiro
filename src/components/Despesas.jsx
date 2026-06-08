@@ -11,63 +11,73 @@ const PAGAMENTOS = ['Dinheiro', 'PIX', 'Débito', 'Crédito', 'Transferência', 
 const STATUS = ['Pago', 'Pendente'];
 
 const UltimasDespesas = ({ despesas }) => {
+  const [expandido, setExpandido] = useState(
+    () => localStorage.getItem('ultimasDespesasExpandido') !== 'false'
+  );
+
+  const toggleExpandido = () => {
+    const novo = !expandido;
+    setExpandido(novo);
+    localStorage.setItem('ultimasDespesasExpandido', String(novo));
+  };
+
   const ultimas = [...despesas]
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     .slice(0, 10);
 
-  const badgeOrigem = (origem) => {
-    const config = {
-      manual:       { label: 'Manual',      cor: 'bg-blue-100 text-blue-700' },
-      importacao:   { label: 'Importação',  cor: 'bg-purple-100 text-purple-700' },
-      parcelamento: { label: 'Parcelamento',cor: 'bg-orange-100 text-orange-700' },
-    };
-    const c = config[origem] || { label: 'Manual', cor: 'bg-gray-100 text-gray-600' };
-    return (
-      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.cor}`} style={{ background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '12px' }}>
-        {c.label}
-      </span>
-    );
-  };
-
   return (
     <div className="card mb-4 animate-fade" style={{ borderColor: 'var(--border)' }}>
-      <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2" style={{ fontSize: '15px' }}>
-        🕐 Últimas Despesas Cadastradas
-        <span className="text-xs text-gray-400 font-normal" style={{ color: 'var(--text-muted)' }}>(independente do filtro)</span>
-      </h3>
+      <div
+        onClick={toggleExpandido}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', userSelect: 'none' }}
+      >
+        <h3 className="font-semibold text-gray-700 flex items-center gap-2" style={{ fontSize: '15px', margin: 0 }}>
+          🕐 Últimas Despesas Cadastradas
+          <span className="text-xs text-gray-400 font-normal" style={{ color: 'var(--text-muted)' }}>(independente do filtro)</span>
+        </h3>
+        <span style={{ fontSize: 18, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: expandido ? 'rotate(0deg)' : 'rotate(-90deg)', display: 'inline-block' }}>
+          ▼
+        </span>
+      </div>
 
-      {ultimas.length === 0 ? (
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Nenhuma despesa cadastrada ainda.</p>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {ultimas.map(d => (
-            <div
-              key={d.$id || d.id}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: '8px' }}
-            >
-              <div className="flex items-center gap-3">
-                {badgeOrigem(d.origem)}
-                <div>
-                  <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', margin: 0 }}>{d.descricao}</p>
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                    {new Date(d.data).toLocaleDateString('pt-BR')} · {d.categoria}
+      <div style={{
+        overflow: 'hidden',
+        maxHeight: expandido ? '600px' : '0px',
+        transition: 'max-height 0.3s ease',
+        marginTop: expandido ? '12px' : '0'
+      }}>
+        {ultimas.length === 0 ? (
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Nenhuma despesa cadastrada ainda.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {ultimas.map(d => (
+              <div
+                key={d.$id || d.id}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: '8px' }}
+              >
+                <div className="flex items-center gap-3">
+                  <div>
+                    <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', margin: 0 }}>{d.descricao}</p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                      {new Date(d.data).toLocaleDateString('pt-BR')} · {d.categoria}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent-red)', margin: 0 }}>
+                    {d.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </p>
+                  {d.createdAt && (
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                      Cadastrado {new Date(d.createdAt).toLocaleDateString('pt-BR')}
+                    </p>
+                  )}
                 </div>
               </div>
-              <div className="text-right">
-                <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent-red)', margin: 0 }}>
-                  {d.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </p>
-                {d.createdAt && (
-                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                    Cadastrado {new Date(d.createdAt).toLocaleDateString('pt-BR')}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -180,8 +190,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
       valor,
       formaPagamento: form.pagamento,
       status: form.status,
-      observacoes: form.observacoes,
-      origem: 'manual'
+      observacoes: form.observacoes || null,
     };
     if (cartaoId) baseDoc.cartaoId = cartaoId;
 
@@ -297,6 +306,26 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
       setDespesas(prev => prev.map(d => d.id === id ? { ...d, status: newStatus } : d));
     } catch (e) {
       alert("Erro ao atualizar status.");
+    }
+  };
+
+  const [isMassDeleting, setIsMassDeleting] = useState(false);
+
+  const handleMassDelete = async () => {
+    if (!window.confirm(`⚠️ Tem certeza que deseja excluir ${selectedIds.length} despesa(s)?\n\nEsta ação não pode ser desfeita.`)) return;
+
+    setIsMassDeleting(true);
+    try {
+      await appwriteService.deletarVarios(COLLECTIONS.DESPESAS, selectedIds);
+      setDespesas(prev => prev.filter(d => !selectedIds.includes(d.id)));
+      mostrarToast(`🗑 ${selectedIds.length} despesa(s) excluída(s) com sucesso!`);
+      setSelectedIds([]);
+      setMassEditForm({ categoria: '', cartaoId: '', pagamento: '', tipo: '' });
+    } catch (e) {
+      console.error(e);
+      mostrarToast('Erro ao excluir despesas.', 'erro');
+    } finally {
+      setIsMassDeleting(false);
     }
   };
 
@@ -757,11 +786,19 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
             {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
 
-          <button className="btn btn-primary" onClick={handleMassUpdate} disabled={isMassEditing}>
+          <button className="btn btn-primary" onClick={handleMassUpdate} disabled={isMassEditing || isMassDeleting}>
             {isMassEditing ? <Loader2 size={16} className="spin" /> : '✅ Aplicar'}
           </button>
+
+          <button
+            onClick={handleMassDelete}
+            disabled={isMassEditing || isMassDeleting}
+            style={{ background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: (isMassEditing || isMassDeleting) ? 0.6 : 1 }}
+          >
+            {isMassDeleting ? <Loader2 size={16} className="spin" /> : <><Trash2 size={14} /> Excluir</>}
+          </button>
           
-          <button className="btn btn-ghost" onClick={() => { setSelectedIds([]); setMassEditForm({ categoria: '', cartaoId: '', pagamento: '', tipo: '' }); }} disabled={isMassEditing}>
+          <button className="btn btn-ghost" onClick={() => { setSelectedIds([]); setMassEditForm({ categoria: '', cartaoId: '', pagamento: '', tipo: '' }); }} disabled={isMassEditing || isMassDeleting}>
             ✕ Cancelar
           </button>
         </div>
