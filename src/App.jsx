@@ -18,7 +18,7 @@ import { calcFinancialScore, getAvailableMonths } from './utils/helpers';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './components/Auth/LoginPage';
 import { appwriteService } from './services/appwriteService';
-import { COLLECTIONS } from './lib/appwrite';
+import { COLLECTIONS, databases, DATABASE_ID, Query } from './lib/appwrite';
 
 /*
   REGRAS DE PERSISTÊNCIA (Appwrite First)
@@ -53,7 +53,19 @@ function FinanceApp({ user, logout }) {
   const [categories, setCategories] = useState({ income: [], expense: [] });
   const [cartoes, setCartoes] = useState([]);
   const [receitas, setReceitas] = useState([]);
-  const [despesas, setDespesas] = useState([]);
+  const [despesasRaw, setDespesasRaw] = useState([]);
+
+  const setDespesas = useCallback((novasDespesasOrUpdater) => {
+    setDespesasRaw(prev => {
+      const novas = typeof novasDespesasOrUpdater === 'function' ? novasDespesasOrUpdater(prev) : novasDespesasOrUpdater;
+      const mapa = new Map();
+      novas.forEach(d => {
+        const id = d.$id || d.id;
+        if (id) mapa.set(id, d);
+      });
+      return Array.from(mapa.values());
+    });
+  }, []);
   const [parcelamentos, setParcelamentos] = useState([]);
   const [patrimonio, setPatrimonio] = useState([]);
   const [dividasList, setDividasList] = useState([]);
@@ -72,22 +84,87 @@ function FinanceApp({ user, logout }) {
   }, [user.$id]);
 
   useEffect(() => {
+    const normalizarDocumento = (doc) => {
+      if (doc.data && !/^\d{4}-\d{2}-\d{2}T/.test(doc.data)) {
+        console.warn(`⚠️ Data não-ISO detectada no doc ${doc.$id}: "${doc.data}"`);
+        try {
+          if (String(doc.data).includes('/')) {
+            const [dia, mes, ano] = String(doc.data).split('/');
+            const anoFull = ano.length === 2 ? '20' + ano : ano;
+            doc = {
+              ...doc,
+              data: new Date(parseInt(anoFull), parseInt(mes) - 1, parseInt(dia), 12, 0, 0).toISOString()
+            };
+          }
+        } catch (e) {
+          console.error(`Erro ao normalizar data:`, e);
+        }
+      }
+      return doc;
+    };
+
+    const buscarTodasDespesas = async () => {
+      try {
+        let todos = [];
+        let offset = 0;
+        const batchSize = 100;
+        let totalServidor = null;
+
+        while (true) {
+          const response = await databases.listDocuments(
+            DATABASE_ID,
+            COLLECTIONS.DESPESAS,
+            [
+              Query.equal('userId', user.$id),
+              Query.limit(batchSize),
+              Query.offset(offset),
+              Query.orderDesc('data')
+            ]
+          );
+
+          todos = [...todos, ...response.documents.map(normalizarDocumento)];
+
+          if (totalServidor === null) {
+            totalServidor = response.total;
+          }
+
+          console.log(`📦 Despesas carregadas: ${todos.length} / ${totalServidor}`);
+
+          if (todos.length >= totalServidor || response.documents.length < batchSize) {
+            break;
+          }
+
+          offset += batchSize;
+        }
+
+        console.log(`✅ Total de despesas carregadas: ${todos.length}`);
+        
+        const formattedDocs = todos.map(doc => {
+          const item = { ...doc };
+          if (!item.id && item.$id) item.id = item.$id;
+          return item;
+        });
+
+        setDespesas(formattedDocs);
+      } catch (error) {
+        console.error('❌ Erro ao buscar despesas:', error);
+      }
+    };
+
     const carregarDados = async () => {
       setAppLoading(true);
       try {
-        // Carregar receitas, despesas, parcelamentos e categorias do Appwrite
-        const [rec, desp, parc, cat] = await Promise.all([
+        await buscarTodasDespesas();
+
+        const [rec, parc, cat] = await Promise.all([
           appwriteService.listar(COLLECTIONS.RECEITAS, user.$id),
-          appwriteService.listar(COLLECTIONS.DESPESAS, user.$id),
           appwriteService.listar(COLLECTIONS.PARCELAMENTOS, user.$id),
           appwriteService.listar(COLLECTIONS.CATEGORIAS, user.$id)
         ]);
 
         setReceitas(rec);
-        setDespesas(desp);
         setParcelamentos(parc);
 
-        // Mapear categorias customizadas
         const inc = [];
         const exp = [];
         cat.forEach(c => {
@@ -95,7 +172,6 @@ function FinanceApp({ user, logout }) {
           else exp.push({ id: c.$id, name: c.nome, color: c.cor });
         });
 
-        // Valores default caso o usuário não tenha categorias
         if (inc.length === 0) inc.push({ id: 'default1', name: 'Salário', color: '#10B981' });
         if (exp.length === 0) exp.push({ id: 'default2', name: 'Alimentação', color: '#EF4444' });
 
@@ -108,6 +184,7 @@ function FinanceApp({ user, logout }) {
     };
 
     carregarDados();
+
   }, [user.$id]);
 
   // Persistir o tema visual
@@ -117,7 +194,7 @@ function FinanceApp({ user, logout }) {
   }, [theme]);
 
   // Available months
-  const availableMonths = useMemo(() => getAvailableMonths(receitas, despesas), [receitas, despesas]);
+  const availableMonths = useMemo(() => getAvailableMonths(receitas, despesasRaw), [receitas, despesasRaw]);
 
   useEffect(() => {
     if (availableMonths.length > 0 && !selectedMonth) {
@@ -127,8 +204,8 @@ function FinanceApp({ user, logout }) {
 
   // Financial score
   const score = useMemo(() =>
-    calcFinancialScore(receitas, despesas, patrimonio, dividasList, metas),
-    [receitas, despesas, patrimonio, dividasList, metas]
+    calcFinancialScore(receitas, despesasRaw, patrimonio, dividasList, metas),
+    [receitas, despesasRaw, patrimonio, dividasList, metas]
   );
 
   const toggleTheme = useCallback(() => {
@@ -136,8 +213,8 @@ function FinanceApp({ user, logout }) {
   }, []);
 
   const data = useMemo(() => ({
-    categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
-  }), [categories, cartoes, receitas, despesas, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
+    categories, cartoes, receitas, despesas: despesasRaw, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais
+  }), [categories, cartoes, receitas, despesasRaw, parcelamentos, patrimonio, dividasList, metas, tarefas, habitos, patrimonioHistorico, aproveitamentoMensal, receitasDespesasMensais]);
 
   if (appLoading) {
     return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Sincronizando com Appwrite...</div>;
@@ -150,17 +227,17 @@ function FinanceApp({ user, logout }) {
       case 'receitas':
         return <Receitas receitas={receitas} setReceitas={setReceitas} categories={categories} setCategories={setCategories} user={user} />;
       case 'despesas':
-        return <Despesas despesas={despesas} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} user={user} />;
+        return <Despesas despesas={despesasRaw} setDespesas={setDespesas} categories={categories} setCategories={setCategories} cartoes={cartoes} user={user} />;
       case 'cartoes':
-        return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesas} user={user} />;
+        return <Cartoes cartoes={cartoes} setCartoes={setCartoes} despesas={despesasRaw} user={user} />;
       case 'parcelamentos':
-        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesas} setDespesas={setDespesas} cartoes={cartoes} categories={categories} user={user} />;
+        return <Parcelamentos parcelamentos={parcelamentos} setParcelamentos={setParcelamentos} despesas={despesasRaw} setDespesas={setDespesas} cartoes={cartoes} categories={categories} user={user} />;
       case 'patrimonio':
         return <Patrimonio patrimonio={patrimonio} setPatrimonio={setPatrimonio} user={user} />;
       case 'dividas':
         return <Dividas dividasList={dividasList} setDividasList={setDividasList} user={user} />;
       case 'metas':
-        return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesas} user={user} />;
+        return <Metas metas={metas} setMetas={setMetas} receitas={receitas} despesas={despesasRaw} user={user} />;
       case 'produtividade':
         return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} user={user} />;
       case 'feedback':

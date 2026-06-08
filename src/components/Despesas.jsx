@@ -10,6 +10,68 @@ const TIPOS = ['Fixa', 'Variável', 'Parcelada'];
 const PAGAMENTOS = ['Dinheiro', 'PIX', 'Débito', 'Crédito', 'Transferência', 'Boleto'];
 const STATUS = ['Pago', 'Pendente'];
 
+const UltimasDespesas = ({ despesas }) => {
+  const ultimas = [...despesas]
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, 10);
+
+  const badgeOrigem = (origem) => {
+    const config = {
+      manual:       { label: 'Manual',      cor: 'bg-blue-100 text-blue-700' },
+      importacao:   { label: 'Importação',  cor: 'bg-purple-100 text-purple-700' },
+      parcelamento: { label: 'Parcelamento',cor: 'bg-orange-100 text-orange-700' },
+    };
+    const c = config[origem] || { label: 'Manual', cor: 'bg-gray-100 text-gray-600' };
+    return (
+      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.cor}`} style={{ background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: '12px' }}>
+        {c.label}
+      </span>
+    );
+  };
+
+  return (
+    <div className="card mb-4 animate-fade" style={{ borderColor: 'var(--border)' }}>
+      <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2" style={{ fontSize: '15px' }}>
+        🕐 Últimas Despesas Cadastradas
+        <span className="text-xs text-gray-400 font-normal" style={{ color: 'var(--text-muted)' }}>(independente do filtro)</span>
+      </h3>
+
+      {ultimas.length === 0 ? (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Nenhuma despesa cadastrada ainda.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {ultimas.map(d => (
+            <div
+              key={d.$id || d.id}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: '8px' }}
+            >
+              <div className="flex items-center gap-3">
+                {badgeOrigem(d.origem)}
+                <div>
+                  <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', margin: 0 }}>{d.descricao}</p>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                    {new Date(d.data).toLocaleDateString('pt-BR')} · {d.categoria}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent-red)', margin: 0 }}>
+                  {d.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+                {d.createdAt && (
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                    Cadastrado {new Date(d.createdAt).toLocaleDateString('pt-BR')}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function Despesas({ despesas, setDespesas, categories, setCategories, cartoes, user }) {
   const [showForm, setShowForm] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
@@ -23,6 +85,7 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
   const [filtStatus, setFiltStatus] = useState('');
   const [filtMes, setFiltMes] = useState('');
   const [filtCartao, setFiltCartao] = useState('');
+  const [considerarVencimentoCartao, setConsiderarVencimentoCartao] = useState(false);
 
   const [form, setForm] = useState({
     data: new Date().toISOString().split('T')[0],
@@ -50,11 +113,29 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     if (filtCat && d.categoria !== filtCat) return false;
     if (filtTipo && d.tipo !== filtTipo) return false;
     if (filtStatus && d.status !== filtStatus) return false;
-    if (filtMes && getMonthKey(d.data) !== filtMes) return false;
     if (filtCartao && String(d.cartaoId) !== String(filtCartao)) return false;
     if (search && !d.descricao.toLowerCase().includes(search.toLowerCase())) return false;
+    
+    if (filtMes) {
+      let dataReferencia = new Date(d.data);
+      if (
+        considerarVencimentoCartao &&
+        d.dataVencimentoCartao &&
+        (d.formaPagamento === 'Cartão de Crédito' || d.pagamento === 'Crédito' || d.cartaoId)
+      ) {
+        dataReferencia = new Date(d.dataVencimentoCartao);
+      }
+      
+      if (!dataReferencia || isNaN(dataReferencia.getTime())) return false;
+      
+      const [y, mo] = filtMes.split('-');
+      if (dataReferencia.getMonth() + 1 !== parseInt(mo) || dataReferencia.getFullYear() !== parseInt(y)) {
+        return false;
+      }
+    }
+    
     return true;
-  }), [despesas, filtCat, filtTipo, filtStatus, filtMes, filtCartao, search]);
+  }), [despesas, filtCat, filtTipo, filtStatus, filtMes, filtCartao, search, considerarVencimentoCartao]);
 
   const total = filtered.reduce((s, d) => s + d.valor, 0);
 
@@ -99,7 +180,8 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
       valor,
       formaPagamento: form.pagamento,
       status: form.status,
-      observacoes: form.observacoes
+      observacoes: form.observacoes,
+      origem: 'manual'
     };
     if (cartaoId) baseDoc.cartaoId = cartaoId;
 
@@ -504,6 +586,9 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
         </div>
       )}
 
+      {/* Últimas Despesas */}
+      <UltimasDespesas despesas={despesas} />
+
       {/* Filtros */}
       <div className="card mb-4">
         <div className="form-row" style={{ gridTemplateColumns: 'auto 1fr 1fr 1fr 1fr 1fr' }}>
@@ -527,14 +612,20 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
             <option value="">Cartão (Todos)</option>
             {cartoes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="input" value={filtMes} onChange={e => setFiltMes(e.target.value)}>
-            <option value="">Mês</option>
-            {meses.map(m => {
-              const [y, mo] = m.split('-');
-              const names = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-              return <option key={m} value={m}>{names[parseInt(mo)-1]}/{y}</option>;
-            })}
-          </select>
+          <div className="flex gap-2" style={{ alignItems: 'center' }}>
+            <select className="input" value={filtMes} onChange={e => setFiltMes(e.target.value)} style={{ flex: 1 }}>
+              <option value="">Mês</option>
+              {meses.map(m => {
+                const [y, mo] = m.split('-');
+                const names = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+                return <option key={m} value={m}>{names[parseInt(mo)-1]}/{y}</option>;
+              })}
+            </select>
+            <div className="flex items-center" style={{ gap: '6px' }}>
+              <input type="checkbox" id="chk-venc" style={{ cursor: 'pointer' }} checked={considerarVencimentoCartao} onChange={e => setConsiderarVencimentoCartao(e.target.checked)} />
+              <label htmlFor="chk-venc" style={{ fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>Usar Vencimento</label>
+            </div>
+          </div>
         </div>
       </div>
 

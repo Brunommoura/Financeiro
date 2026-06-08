@@ -55,6 +55,102 @@ const parsearValor = (valorBruto) => {
   return isNaN(numero) ? null : Math.abs(numero);
 };
 
+const normalizarNome = (str) => {
+  if (!str) return '';
+  return String(str)
+    .trim()                          
+    .replace(/\s+/g, ' ')           
+    .replace(/\u00A0/g, ' ')        
+    .replace(/\u200B/g, '')         
+    .normalize('NFD')               
+    .replace(/[\u0300-\u036f]/g, '') 
+    .toLowerCase();
+};
+
+const toAppwriteDate = (dataObj) => {
+  let d;
+
+  if (dataObj instanceof Date) {
+    d = dataObj;
+  } else if (typeof dataObj === 'string') {
+    if (dataObj.includes('/')) {
+      const [dia, mes, ano] = dataObj.trim().split('/');
+      const anoFull = ano.length === 2 ? '20' + ano : ano;
+      d = new Date(parseInt(anoFull), parseInt(mes) - 1, parseInt(dia), 12, 0, 0);
+    } else {
+      d = new Date(dataObj);
+    }
+  } else if (typeof dataObj === 'number') {
+    const excelEpoch = new Date(1899, 11, 30);
+    d = new Date(excelEpoch.getTime() + dataObj * 86400000);
+    d.setHours(12, 0, 0, 0);
+  }
+
+  if (!d || isNaN(d.getTime())) {
+    throw new Error(`Data inválida: "${dataObj}"`);
+  }
+
+  return d.toISOString();
+};
+
+const encontrarCartao = (cartoes, nomeNaPlanilha) => {
+  if (!nomeNaPlanilha || String(nomeNaPlanilha).trim() === '') return null;
+
+  const nomePlanilhaNorm = normalizarNome(nomeNaPlanilha);
+
+  let cartao = cartoes.find(c => normalizarNome(c.nome) === nomePlanilhaNorm);
+  if (cartao) return cartao;
+
+  cartao = cartoes.find(c =>
+    normalizarNome(c.nome).includes(nomePlanilhaNorm) ||
+    nomePlanilhaNorm.includes(normalizarNome(c.nome))
+  );
+  if (cartao) return cartao;
+
+  console.warn(`⚠️ Cartão não encontrado: "${nomeNaPlanilha}"`);
+  console.warn('Cartões disponíveis:', cartoes.map(c => `"${c.nome}"`).join(', '));
+
+  return null;
+};
+
+const salvarDespesaSegura = async (dados, userId) => {
+  try {
+    return await databases.createDocument(
+      DATABASE_ID,
+      COLLECTIONS.DESPESAS,
+      ID.unique(),
+      dados,
+      [
+        Permission.read(Role.user(userId)),
+        Permission.update(Role.user(userId)),
+        Permission.delete(Role.user(userId))
+      ]
+    );
+  } catch (error) {
+    if (
+      error.message?.includes('dataVencimentoCartao') ||
+      error.message?.includes('Unknown attribute')
+    ) {
+      console.warn('⚠️ Atributo dataVencimentoCartao não existe na collection — importando sem ele');
+      const dadosSemVencimento = { ...dados };
+      delete dadosSemVencimento.dataVencimentoCartao;
+
+      return await databases.createDocument(
+        DATABASE_ID,
+        COLLECTIONS.DESPESAS,
+        ID.unique(),
+        dadosSemVencimento,
+        [
+          Permission.read(Role.user(userId)),
+          Permission.update(Role.user(userId)),
+          Permission.delete(Role.user(userId))
+        ]
+      );
+    }
+    throw error;
+  }
+};
+
 export default function ImportModal({ isOpen, onClose, initialType = 'despesas', user, onImportSuccess, setDespesas, setParcelamentos }) {
   const [tipo, setTipo] = useState(initialType);
   const [file, setFile] = useState(null);
@@ -302,6 +398,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
         [Query.equal('userId', userId), Query.limit(100)]
       );
       cartoes = resCartoes.documents;
+      console.log('💳 Cartões carregados do Appwrite:', cartoes.map(c => `"${c.nome}"`).join(', '));
     } catch (err) {
       console.warn('Não foi possível buscar cartões:', err.message);
     }
@@ -393,9 +490,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
         let cartaoId = null;
         if (cartaoRaw && String(cartaoRaw).trim() !== '') {
-          const cartaoEncontrado = cartoes.find(c =>
-            c.nome.toLowerCase().trim() === String(cartaoRaw).toLowerCase().trim()
-          );
+          const cartaoEncontrado = encontrarCartao(cartoes, cartaoRaw);
           if (cartaoEncontrado) {
             cartaoId = cartaoEncontrado.$id;
           } else {
@@ -423,12 +518,13 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
         const dadosDespesa = {
           userId,
-          data: dataObj.toISOString(),
+          data: toAppwriteDate(dataRaw),
           descricao: String(descricaoRaw).trim(),
           tipo: tipoNorm,
           categoria: String(categoriaRaw || 'Outros').trim(),
           valor,
           status: statusNorm,
+          origem: 'importacao',
           createdAt: new Date().toISOString()
         };
 
@@ -447,17 +543,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
         console.log(`📤 Importando linha ${numLinha}:`, dadosDespesa);
 
-        await databases.createDocument(
-          DATABASE_ID,
-          COLLECTIONS.DESPESAS,
-          ID.unique(),
-          dadosDespesa,
-          [
-            Permission.read(Role.user(userId)),
-            Permission.update(Role.user(userId)),
-            Permission.delete(Role.user(userId))
-          ]
-        );
+        await salvarDespesaSegura(dadosDespesa, userId);
 
         console.log(`✅ Linha ${numLinha} importada com sucesso`);
         sucessos.push({ linha: numLinha, descricao: String(descricaoRaw).trim() });
@@ -487,6 +573,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
     try {
       const resCartoes = await databases.listDocuments(DATABASE_ID, COLLECTIONS.CARTOES, [Query.equal('userId', userId)]);
       cartoes = resCartoes.documents;
+      console.log('💳 Cartões carregados do Appwrite:', cartoes.map(c => `"${c.nome}"`).join(', '));
     } catch (err) {
       console.warn('Não foi possível buscar cartões:', err.message);
     }
@@ -538,7 +625,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
         let cartaoObj = null;
 
         if (nomeCartao && nomeCartao.trim() !== '') {
-          cartaoObj = cartoes.find(c => c.nome && c.nome.toLowerCase().trim() === String(nomeCartao).toLowerCase().trim());
+          cartaoObj = encontrarCartao(cartoes, nomeCartao);
           if (cartaoObj) {
             cartaoId = cartaoObj.$id;
           } else {
@@ -555,10 +642,11 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
           valorTotal,
           numeroParcelas: numParcelas,
           valorParcela,
-          dataPrimeiraParcela: dataPrimeira.toISOString(),
+          dataPrimeiraParcela: toAppwriteDate(dataBruta),
           categoria: String(categoria).trim(),
           parcelasPagas: 0,
           status: 'Ativo',
+          origem: 'importacao',
           createdAt: new Date().toISOString()
         };
         
@@ -590,13 +678,14 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
 
           const despesaParcelada = {
             userId,
-            data: dataParcela.toISOString(),
+            data: toAppwriteDate(dataParcela),
             descricao: `${String(descricao).trim()} - Parcela ${p + 1}/${numParcelas}`,
             tipo: 'Parcelada',
             categoria: String(categoria).trim(),
             valor: valorEstaParcela,
             parcelamentoId: parcelamento.$id,
             status: 'Pendente',
+            origem: 'parcelamento',
             createdAt: new Date().toISOString()
           };
 
@@ -606,13 +695,7 @@ export default function ImportModal({ isOpen, onClose, initialType = 'despesas',
           }
           if (dataVencimentoCartao) despesaParcelada.dataVencimentoCartao = dataVencimentoCartao;
 
-          await databases.createDocument(
-            DATABASE_ID,
-            COLLECTIONS.DESPESAS,
-            ID.unique(),
-            despesaParcelada,
-            [Permission.read(Role.user(userId)), Permission.update(Role.user(userId)), Permission.delete(Role.user(userId))]
-          );
+          await salvarDespesaSegura(despesaParcelada, userId);
         }
 
         sucessos.push({ linha: numLinha, descricao });
