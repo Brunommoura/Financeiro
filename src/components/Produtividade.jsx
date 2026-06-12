@@ -30,17 +30,15 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
 
   useEffect(() => {
     const temDadosFalsosTarefas = tarefas.some(t => !t.$id);
-    const temDadosFalsosHabitos = habitos.some(h => !h.$id);
     const temDadosFalsosAprov = aproveitamentoMensal.some(a => !a.$id);
     
-    if (temDadosFalsosTarefas || temDadosFalsosHabitos || temDadosFalsosAprov) {
+    if (temDadosFalsosTarefas || temDadosFalsosAprov) {
       console.warn('⚠️ Dados hardcoded detectados em produtividade — limpando e buscando do Appwrite');
       if (temDadosFalsosTarefas) setTarefas([]);
-      if (temDadosFalsosHabitos) setHabitos([]);
       if (temDadosFalsosAprov) setAproveitamentoMensal([]);
       if (user?.$id) carregarDados(user.$id);
     }
-  }, [tarefas, habitos, aproveitamentoMensal, user]);
+  }, [tarefas, aproveitamentoMensal, user]);
 
   useEffect(() => {
     if (user?.$id) {
@@ -57,36 +55,22 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
       ]);
 
       const todasTarefas = [];
-      const todosHabitos = [];
 
       resProd.documents.forEach(doc => {
-        // Appwrite fields we map back to our state
-        if (doc.tipoRegistro === 'habito') {
-          todosHabitos.push({
-            ...doc,
-            id: doc.$id,
-            nome: doc.titulo,
-            streak: doc.streak || 0,
-            meta: doc.meta || 30,
-            completadoHoje: doc.data === hoje
-          });
-        } else {
-          todasTarefas.push({
-            ...doc,
-            id: doc.$id,
-            titulo: doc.titulo,
-            categoria: doc.categoria || 'Trabalho',
-            prioridade: doc.prioridade || 'Média',
-            status: doc.status || 'Pendente',
-            tempoEstimado: doc.tempoEstimado || 0,
-            tempoReal: doc.tempoReal || 0,
-            data: doc.data || hoje
-          });
-        }
+        todasTarefas.push({
+          ...doc,
+          id: doc.$id,
+          tarefa: doc.tarefa, titulo: doc.tarefa,
+          categoria: doc.categoria || 'Trabalho',
+          prioridade: doc.prioridade || 'Média',
+          status: doc.status || 'Pendente',
+          tempoEstimado: doc.tempoEstimado || 0,
+          tempoReal: doc.tempoReal || 0,
+          data: doc.data || hoje
+        });
       });
 
       setTarefas(todasTarefas);
-      setHabitos(todosHabitos);
       
       const mappedAprov = resAprov.documents.map(d => ({
         ...d,
@@ -109,21 +93,21 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     if (!form.titulo) return;
     try {
       console.log('📤 [Appwrite] Criando tarefa:', form.titulo);
+      const dadosTarefa = {
+        userId: user.$id,
+        tarefa: form.titulo,
+        categoria: form.categoria,
+        prioridade: form.prioridade,
+        status: form.status,
+        data: form.data,
+        tempoEstimado: form.tempoEstimado !== '' && form.tempoEstimado != null ? parseInt(form.tempoEstimado) : 0,
+        tempoReal: form.tempoReal !== '' && form.tempoReal != null ? parseInt(form.tempoReal) : 0
+      };
       const doc = await databases.createDocument(
         DATABASE_ID,
         COLLECTIONS.PRODUTIVIDADE,
         ID.unique(),
-        {
-          userId: user.$id,
-          tipoRegistro: 'tarefa',
-          titulo: form.titulo,
-          categoria: form.categoria,
-          prioridade: form.prioridade,
-          status: form.status,
-          data: form.data,
-          tempoEstimado: parseInt(form.tempoEstimado) || 0,
-          tempoReal: parseInt(form.tempoReal) || 0
-        },
+        dadosTarefa,
         [
           Permission.read(Role.user(user.$id)),
           Permission.update(Role.user(user.$id)),
@@ -134,7 +118,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
       setTarefas(prev => [...prev, { 
         ...doc, 
         id: doc.$id,
-        titulo: doc.titulo,
+        tarefa: doc.tarefa, titulo: doc.tarefa,
         categoria: doc.categoria,
         prioridade: doc.prioridade,
         status: doc.status,
@@ -178,73 +162,6 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     } catch (error) {
       console.error('❌ [Appwrite] Erro ao atualizar status:', error);
       mostrarToast('❌ Erro ao atualizar status.', 'erro');
-    }
-  };
-
-  const [novoHabito, setNovoHabito] = useState('');
-  const addHabito = async () => {
-    if (!novoHabito.trim()) return;
-    try {
-      console.log('📤 [Appwrite] Criando hábito:', novoHabito);
-      const doc = await databases.createDocument(
-        DATABASE_ID,
-        COLLECTIONS.PRODUTIVIDADE,
-        ID.unique(),
-        {
-          userId: user.$id,
-          tipoRegistro: 'habito',
-          titulo: novoHabito,
-          streak: 0,
-          meta: 30,
-          data: null
-        },
-        [
-          Permission.read(Role.user(user.$id)),
-          Permission.update(Role.user(user.$id)),
-          Permission.delete(Role.user(user.$id))
-        ]
-      );
-      console.log('✅ [Appwrite] Hábito criado:', doc.$id);
-      setHabitos(prev => [...prev, { ...doc, id: doc.$id, nome: doc.titulo, streak: doc.streak, meta: doc.meta, completadoHoje: false }]);
-      setNovoHabito('');
-      mostrarToast('✅ Hábito salvo com sucesso!');
-    } catch (error) {
-      console.error('❌ [Appwrite] Erro ao criar hábito:', error);
-      mostrarToast('❌ Erro ao salvar hábito.', 'erro');
-    }
-  };
-
-  const toggleHabito = async (id) => {
-    const habito = habitos.find(h => h.id === id);
-    if (!habito) return;
-    const completadoHoje = !habito.completadoHoje;
-    const streakNovo = completadoHoje ? habito.streak + 1 : Math.max(0, habito.streak - 1);
-    const dataUpdate = completadoHoje ? hoje : null;
-
-    try {
-      console.log('📤 [Appwrite] Atualizando hábito:', id);
-      const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id, {
-        streak: streakNovo,
-        data: dataUpdate
-      });
-      console.log('✅ [Appwrite] Hábito atualizado:', id);
-      setHabitos(prev => prev.map(h => h.id === id ? { ...h, completadoHoje, streak: doc.streak } : h));
-    } catch (error) {
-      console.error('❌ [Appwrite] Erro ao atualizar hábito:', error);
-      mostrarToast('❌ Erro ao atualizar hábito.', 'erro');
-    }
-  };
-
-  const deleteHabito = async (id) => {
-    try {
-      console.log('📤 [Appwrite] Excluindo hábito:', id);
-      await databases.deleteDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, id);
-      console.log('✅ [Appwrite] Hábito excluído:', id);
-      setHabitos(prev => prev.filter(x => x.id !== id));
-      mostrarToast('🗑️ Hábito excluído!');
-    } catch (error) {
-      console.error('❌ [Appwrite] Erro ao excluir hábito:', error);
-      mostrarToast('❌ Erro ao excluir hábito.', 'erro');
     }
   };
 
@@ -329,7 +246,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
 
   const concluidas = tarefas.filter(t => t.status === 'Concluída');
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
-  const streakMax = habitos.reduce((max, h) => Math.max(max, h.streak), 0);
+  const streakMax = 0;
   const tempoTotal = concluidas.reduce((s, t) => s + (t.tempoReal || t.tempoEstimado), 0);
   const hojeCompletas = tarefas.filter(t => t.data === hoje && t.status === 'Concluída').length;
 
@@ -396,7 +313,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
           { label: 'Concluídas', value: concluidas.length, color: 'var(--accent-green)', icon: '✅' },
           { label: 'Taxa Conclusão', value: `${taxaConclusao.toFixed(0)}%`, color: 'var(--accent-blue)', icon: '📊' },
           { label: 'Horas Produtivas', value: `${(tempoTotal / 60).toFixed(1)}h`, color: 'var(--accent-purple)', icon: '⏱️' },
-          { label: 'Streak Máximo', value: `${streakMax} dias`, color: 'var(--accent-yellow)', icon: '🔥' },
+          { label: 'Total de Tarefas', value: tarefas.length, color: 'var(--accent-yellow)', icon: '📋' },
         ].map(m => (
           <div key={m.label} className="card" style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 24, marginBottom: 6 }}>{m.icon}</div>
@@ -406,8 +323,8 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         ))}
       </div>
 
-      {/* Gráfico + Hábitos */}
-      <div className="grid-2 mb-6">
+      {/* Gráfico de Tarefas por Categoria */}
+      <div className="mb-6">
         <div className="card">
           <div className="section-title mb-3">Tarefas por Categoria</div>
           <ResponsiveContainer width="100%" height={220}>
@@ -420,48 +337,6 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
               <Bar dataKey="pendentes" name="Pendentes" fill="#64748b" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
-
-        <div className="card">
-          <div className="section-header mb-3">
-            <div className="section-title">Hábitos Diários</div>
-            <div className="flex gap-2">
-              <input
-                className="input" style={{ maxWidth: 160, fontSize: 13 }}
-                placeholder="Novo hábito..." value={novoHabito}
-                onChange={e => setNovoHabito(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addHabito()}
-              />
-              <button className="btn btn-primary btn-sm" onClick={addHabito}><Plus size={14} /></button>
-            </div>
-          </div>
-          {habitos.map(h => (
-            <div key={h.id} style={{ marginBottom: 14 }}>
-              <div className="flex items-center gap-2 mb-2">
-                <button
-                  onClick={() => toggleHabito(h.id)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: 0 }}
-                >
-                  {h.completadoHoje ? '✅' : '⭕'}
-                </button>
-                <span style={{ fontWeight: 500, fontSize: 13, flex: 1 }}>{h.nome}</span>
-                <span style={{ fontSize: 12, color: 'var(--accent-yellow)', fontWeight: 700 }}>🔥 {h.streak}</span>
-                <button
-                  className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => deleteHabito(h.id)}
-                >
-                  <Trash2 size={12} color="var(--accent-red)" />
-                </button>
-              </div>
-              <div className="progress-bar" style={{ height: 5 }}>
-                <div className="progress-fill" style={{
-                  width: `${Math.min(100, (h.streak / h.meta) * 100)}%`,
-                  background: h.completadoHoje ? 'var(--accent-green)' : 'var(--border-light)'
-                }} />
-              </div>
-              <div className="text-xs text-muted mt-1">{h.streak}/{h.meta} dias (meta)</div>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -497,12 +372,12 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
               <input type="date" className="input" value={form.data} onChange={e => setForm({ ...form, data: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="label">Tempo Est. (min)</label>
-              <input type="number" className="input" value={form.tempoEstimado} onChange={e => setForm({ ...form, tempoEstimado: e.target.value })} />
+              <label className="label">Tempo Est. (min) <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span></label>
+              <input type="number" className="input" placeholder="Deixe em branco se não souber" value={form.tempoEstimado} onChange={e => setForm({ ...form, tempoEstimado: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="label">Tempo Real (min)</label>
-              <input type="number" className="input" value={form.tempoReal} onChange={e => setForm({ ...form, tempoReal: e.target.value })} />
+              <label className="label">Tempo Real (min) <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span></label>
+              <input type="number" className="input" placeholder="Preencha após concluir" value={form.tempoReal} onChange={e => setForm({ ...form, tempoReal: e.target.value })} />
             </div>
           </div>
           <div className="flex gap-2 mt-2">
@@ -544,7 +419,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
                   fontWeight: 500, fontSize: 14,
                   textDecoration: t.status === 'Concluída' ? 'line-through' : 'none',
                   color: t.status === 'Concluída' ? 'var(--text-muted)' : 'var(--text-primary)'
-                }}>{t.titulo}</div>
+                }}>{t.titulo || t.tarefa}</div>
                 <div className="flex gap-2 mt-1 flex-wrap">
                   <span className="badge badge-gray" style={{ fontSize: 10 }}>{t.categoria}</span>
                   <span className="badge" style={{ fontSize: 10, background: `${priorColor[t.prioridade]}22`, color: priorColor[t.prioridade] }}>{t.prioridade}</span>

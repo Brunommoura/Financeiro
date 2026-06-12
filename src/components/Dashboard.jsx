@@ -95,7 +95,7 @@ const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, v
   );
 };
 
-export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, setSelectedMonth, availableMonths }) {
+export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, setSelectedMonth, availableMonths, selectedYear, setSelectedYear, availableYears }) {
   const { receitas, despesas, patrimonio, dividasList, metas, tarefas, habitos, parcelamentos, aproveitamentoMensal } = data;
 
   const [userName, setUserName] = useState('');
@@ -228,16 +228,18 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   // Aproveitamento mini-data
   const aprovData = useMemo(() => (aproveitamentoMensal || []).slice().sort((a, b) => a.id - b.id), [aproveitamentoMensal]);
 
-  // Filter by month/view
-  const filteredReceitas = useMemo(() =>
-    viewMode === 'mensal'
-      ? receitas.filter(r => getMonthKey(r.data) === selectedMonth)
-      : receitas, [receitas, viewMode, selectedMonth]);
+  // Filter by month/view/year
+  const filteredReceitas = useMemo(() => {
+    if (viewMode === 'mensal') return receitas.filter(r => getMonthKey(r.data) === selectedMonth);
+    if (viewMode === 'anual') return receitas.filter(r => r.data && String(new Date(r.data).getFullYear()) === String(selectedYear));
+    return receitas;
+  }, [receitas, viewMode, selectedMonth, selectedYear]);
 
-  const filteredDespesas = useMemo(() =>
-    viewMode === 'mensal'
-      ? despesas.filter(d => getMonthKey(d.data) === selectedMonth)
-      : despesas, [despesas, viewMode, selectedMonth]);
+  const filteredDespesas = useMemo(() => {
+    if (viewMode === 'mensal') return despesas.filter(d => getMonthKey(d.data) === selectedMonth);
+    if (viewMode === 'anual') return despesas.filter(d => d.data && String(new Date(d.data).getFullYear()) === String(selectedYear));
+    return despesas;
+  }, [despesas, viewMode, selectedMonth, selectedYear]);
 
   const totalReceitas = useMemo(() => filteredReceitas.reduce((s, r) => s + r.valor, 0), [filteredReceitas]);
   const totalDespesas = useMemo(() => filteredDespesas.reduce((s, d) => s + d.valor, 0), [filteredDespesas]);
@@ -337,12 +339,20 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div className="tabs" style={{ padding: 3, gap: 2 }}>
             <button className={`tab-btn ${viewMode === 'geral' ? 'active' : ''}`} onClick={() => setViewMode('geral')}>Visão Geral</button>
+            <button className={`tab-btn ${viewMode === 'anual' ? 'active' : ''}`} onClick={() => setViewMode('anual')}>Anual</button>
             <button className={`tab-btn ${viewMode === 'mensal' ? 'active' : ''}`} onClick={() => setViewMode('mensal')}>Mensal</button>
           </div>
           {viewMode === 'mensal' && (
             <select className="input" style={{ width: 'auto' }} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
               {availableMonths.map(m => (
                 <option key={m} value={m}>{formatMonthLabel(m)}</option>
+              ))}
+            </select>
+          )}
+          {viewMode === 'anual' && (
+            <select className="input" style={{ width: 'auto' }} value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+              {availableYears.map(y => (
+                <option key={y} value={y}>{y}</option>
               ))}
             </select>
           )}

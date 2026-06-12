@@ -47,6 +47,7 @@ function FinanceApp({ user, logout }) {
   const [theme, setTheme] = useState(() => localStorage.getItem('financepro_theme') || 'dark');
   const [viewMode, setViewMode] = useState('geral');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [selectedYear, setSelectedYear] = useState('');
   const [appLoading, setAppLoading] = useState(true);
 
   // Estados sempre começam vazios! (Sem sampleData)
@@ -156,14 +157,34 @@ function FinanceApp({ user, logout }) {
       try {
         await buscarTodasDespesas();
 
-        const [rec, parc, cat] = await Promise.all([
+        const [rec, parc, cat, cards, patr, div, mts] = await Promise.all([
           appwriteService.listar(COLLECTIONS.RECEITAS, user.$id),
           appwriteService.listar(COLLECTIONS.PARCELAMENTOS, user.$id),
-          appwriteService.listar(COLLECTIONS.CATEGORIAS, user.$id)
+          appwriteService.listar(COLLECTIONS.CATEGORIAS, user.$id),
+          appwriteService.listar(COLLECTIONS.CARTOES, user.$id),
+          appwriteService.listar(COLLECTIONS.PATRIMONIO, user.$id),
+          appwriteService.listar(COLLECTIONS.DIVIDAS, user.$id),
+          appwriteService.listar(COLLECTIONS.METAS, user.$id)
         ]);
 
         setReceitas(rec);
         setParcelamentos(parc);
+        // Mapear cartões com campos auxiliares usados por Despesas/Parcelamentos
+        setCartoes(cards.map(d => ({
+          ...d,
+          id: d.$id,
+          name: d.nome,
+          brand: d.bandeira,
+          lastDigits: d.ultimosDigitos,
+          limit: d.limite,
+          closingDay: d.diaFechamento,
+          dueDay: d.diaVencimento,
+          color: d.cor,
+          active: d.ativo
+        })));
+        setPatrimonio(patr);
+        setDividasList(div);
+        setMetas(mts);
 
         const inc = [];
         const exp = [];
@@ -196,11 +217,26 @@ function FinanceApp({ user, logout }) {
   // Available months
   const availableMonths = useMemo(() => getAvailableMonths(receitas, despesasRaw), [receitas, despesasRaw]);
 
+  // Available years (derivado dos meses disponíveis: "YYYY-MM" -> "YYYY")
+  const availableYears = useMemo(() => {
+    const anos = new Set();
+    availableMonths.forEach(m => anos.add(m.split('-')[0]));
+    receitas.forEach(r => { if (r.data) anos.add(String(new Date(r.data).getFullYear())); });
+    despesasRaw.forEach(d => { if (d.data) anos.add(String(new Date(d.data).getFullYear())); });
+    return Array.from(anos).sort((a, b) => b.localeCompare(a)); // mais recente primeiro
+  }, [availableMonths, receitas, despesasRaw]);
+
   useEffect(() => {
     if (availableMonths.length > 0 && !selectedMonth) {
       setSelectedMonth(availableMonths[0]);
     }
   }, [availableMonths, selectedMonth]);
+
+  useEffect(() => {
+    if (availableYears.length > 0 && !selectedYear) {
+      setSelectedYear(availableYears[0]);
+    }
+  }, [availableYears, selectedYear]);
 
   // Financial score
   const score = useMemo(() =>
@@ -223,7 +259,7 @@ function FinanceApp({ user, logout }) {
   const renderTab = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard data={data} viewMode={viewMode} setViewMode={setViewMode} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} availableMonths={availableMonths} />;
+        return <Dashboard data={data} viewMode={viewMode} setViewMode={setViewMode} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} availableMonths={availableMonths} selectedYear={selectedYear} setSelectedYear={setSelectedYear} availableYears={availableYears} />;
       case 'receitas':
         return <Receitas receitas={receitas} setReceitas={setReceitas} categories={categories} setCategories={setCategories} user={user} />;
       case 'despesas':
