@@ -12,7 +12,7 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   const [isSaving, setIsSaving] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [form, setForm] = useState({
-    description: '', totalValue: '', installmentCount: '', startDate: new Date().toISOString().split('T')[0],
+    description: '', totalValue: '', installmentValue: '', valueMode: 'total', installmentCount: '', startDate: new Date().toISOString().split('T')[0],
     cardId: '', category: 'Outros', notes: ''
   });
 
@@ -22,10 +22,10 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
       const desc = parcelamento.descricao || parcelamento.description || parcelamento.nome || '';
       const total = parcelamento.valorTotal || parcelamento.totalValue || 0;
       const count = parcelamento.numeroParcelas || parcelamento.installmentCount || parcelamento.parcelas || 0;
-      setForm({ ...parcelamento, description: desc, totalValue: total.toString(), installmentCount: count.toString(), cardId: String(parcelamento.cartaoId || parcelamento.cardId || '') });
+      setForm({ ...parcelamento, description: desc, totalValue: total.toString(), installmentValue: '', valueMode: 'total', installmentCount: count.toString(), cardId: String(parcelamento.cartaoId || parcelamento.cardId || '') });
     } else {
       setEditingId(null);
-      setForm({ description: '', totalValue: '', installmentCount: '', startDate: new Date().toISOString().split('T')[0], cardId: '', category: 'Outros', notes: '' });
+      setForm({ description: '', totalValue: '', installmentValue: '', valueMode: 'total', installmentCount: '', startDate: new Date().toISOString().split('T')[0], cardId: '', category: 'Outros', notes: '' });
     }
     setShowForm(true);
   };
@@ -75,7 +75,8 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
   };
 
   const handleSave = async () => {
-    if (!form.description || !form.totalValue || !form.installmentCount || !form.cardId) {
+    const valorPreenchido = form.valueMode === 'total' ? form.totalValue : form.installmentValue;
+    if (!form.description || !valorPreenchido || !form.installmentCount || !form.cardId) {
       alert("Preencha todos os campos obrigatórios (Descrição, Valor, Parcelas, Cartão).");
       return;
     }
@@ -106,10 +107,19 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
           return updated || d;
         }));
       } else {
-        const totalValue = parseFloat(form.totalValue);
         const installmentCount = parseInt(form.installmentCount);
-        const installmentValue = parseFloat((totalValue / installmentCount).toFixed(2));
-        
+        let totalValue, installmentValue;
+
+        if (form.valueMode === 'parcela') {
+          // Usuário informou o valor da parcela → calcular o total
+          installmentValue = parseFloat(parseFloat(form.installmentValue).toFixed(2));
+          totalValue = parseFloat((installmentValue * installmentCount).toFixed(2));
+        } else {
+          // Usuário informou o valor total → calcular o valor da parcela
+          totalValue = parseFloat(form.totalValue);
+          installmentValue = parseFloat((totalValue / installmentCount).toFixed(2));
+        }
+
         const masterDoc = {
           descricao: form.description,
           valorTotal: totalValue,
@@ -330,10 +340,41 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
             </div>
             {!editingId && (
               <>
-                <div className="form-group">
-                  <label className="label">Valor Total (R$)</label>
-                  <input type="number" className="input" value={form.totalValue} onChange={e => setForm({ ...form, totalValue: e.target.value })} />
+                <div className="form-group" style={{ gridColumn: '1/-1' }}>
+                  <label className="label">Como deseja informar o valor?</label>
+                  <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                      <input
+                        type="radio"
+                        name="valueMode"
+                        checked={form.valueMode === 'total'}
+                        onChange={() => setForm({ ...form, valueMode: 'total' })}
+                      />
+                      Valor Total
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                      <input
+                        type="radio"
+                        name="valueMode"
+                        checked={form.valueMode === 'parcela'}
+                        onChange={() => setForm({ ...form, valueMode: 'parcela' })}
+                      />
+                      Valor da Parcela
+                    </label>
+                  </div>
                 </div>
+
+                {form.valueMode === 'total' ? (
+                  <div className="form-group">
+                    <label className="label">Valor Total (R$)</label>
+                    <input type="number" className="input" placeholder="Ex: 3000.00" value={form.totalValue} onChange={e => setForm({ ...form, totalValue: e.target.value })} />
+                  </div>
+                ) : (
+                  <div className="form-group">
+                    <label className="label">Valor da Parcela (R$)</label>
+                    <input type="number" className="input" placeholder="Ex: 250.00" value={form.installmentValue} onChange={e => setForm({ ...form, installmentValue: e.target.value })} />
+                  </div>
+                )}
                 <div className="form-group">
                   <label className="label">Número de Parcelas</label>
                   <input type="number" className="input" min="2" max="60" value={form.installmentCount} onChange={e => setForm({ ...form, installmentCount: e.target.value })} />
@@ -342,6 +383,16 @@ export default function Parcelamentos({ parcelamentos, setParcelamentos, despesa
                   <label className="label">Data Primeira Parcela</label>
                   <input type="date" className="input" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} />
                 </div>
+                {/* Prévia do cálculo */}
+                {form.installmentCount > 0 && (form.totalValue || form.installmentValue) && (
+                  <div className="form-group" style={{ gridColumn: '1/-1' }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '8px 12px', borderRadius: 8 }}>
+                      {form.valueMode === 'total'
+                        ? `≈ ${parseInt(form.installmentCount)}x de ${formatCurrency((parseFloat(form.totalValue) || 0) / parseInt(form.installmentCount))}`
+                        : `Total: ${formatCurrency((parseFloat(form.installmentValue) || 0) * parseInt(form.installmentCount))} em ${parseInt(form.installmentCount)}x`}
+                    </div>
+                  </div>
+                )}
               </>
             )}
             <div className="form-group">
