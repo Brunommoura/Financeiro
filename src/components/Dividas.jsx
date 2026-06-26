@@ -68,7 +68,6 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           {
             tipo: form.tipo,
             credor: form.credor,
-            descricao: form.descricao || null,
             valorOriginal: parseFloat(form.valorOriginal) || 0,
             saldoDevedor: parseFloat(form.saldoDevedor),
             taxaJuros: parseFloat(form.taxaJuros) || 0,
@@ -77,7 +76,7 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           }
         );
         const updated = {
-          ...doc, id: doc.$id, tipo: doc.tipo, credor: doc.credor, descricao: doc.descricao || doc.credor,
+          ...doc, id: doc.$id, tipo: doc.tipo, credor: doc.credor, descricao: form.descricao || doc.credor,
           valorOriginal: doc.valorOriginal, saldoDevedor: doc.saldoDevedor, taxaJuros: doc.taxaJuros, 
           parcelaMensal: doc.parcelaMensal, dataQuitacao: doc.dataQuitacao ? doc.dataQuitacao.split('T')[0] : ''
         };
@@ -91,7 +90,6 @@ export default function Dividas({ dividasList, setDividasList, user }) {
             userId: user.$id,
             tipo: form.tipo,
             credor: form.credor,
-            descricao: form.descricao || null,
             valorOriginal: parseFloat(form.valorOriginal) || 0,
             saldoDevedor: parseFloat(form.saldoDevedor),
             taxaJuros: parseFloat(form.taxaJuros) || 0,
@@ -105,7 +103,7 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           ]
         );
         const novo = {
-          ...doc, id: doc.$id, tipo: doc.tipo, credor: doc.credor, descricao: doc.descricao || doc.credor,
+          ...doc, id: doc.$id, tipo: doc.tipo, credor: doc.credor, descricao: form.descricao || doc.credor,
           valorOriginal: doc.valorOriginal, saldoDevedor: doc.saldoDevedor, taxaJuros: doc.taxaJuros, 
           parcelaMensal: doc.parcelaMensal, dataQuitacao: doc.dataQuitacao ? doc.dataQuitacao.split('T')[0] : ''
         };

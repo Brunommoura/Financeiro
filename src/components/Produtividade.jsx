@@ -19,6 +19,15 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const [showAprovForm, setShowAprovForm] = useState(false);
   const [aprovFilter, setAprovFilter] = useState(6);
   const [aprovForm, setAprovForm] = useState({ id: null, mesAno: '', aproveitamento: '', observacoes: '' });
+
+  // Formata "2026-05" → "Mai/2026" para exibição
+  const formatarMesAno = (mesAno) => {
+    if (!mesAno || !mesAno.includes('-')) return mesAno || '';
+    const [ano, mes] = mesAno.split('-');
+    const nomesMeses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const idx = parseInt(mes) - 1;
+    return idx >= 0 && idx < 12 ? `${nomesMeses[idx]}/${ano}` : mesAno;
+  };
   const [activeFilter, setActiveFilter] = useState('Todas');
   const [form, setForm] = useState({
     titulo: '', categoria: 'Trabalho', prioridade: 'Média',
@@ -75,8 +84,9 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
       const mappedAprov = resAprov.documents.map(d => ({
         ...d,
         id: d.$id,
-        mesAno: d.mesAno,
-        aproveitamento: d.aproveitamento,
+        // Reconstruir mesAno "YYYY-MM" a partir de mes e ano do Appwrite
+        mesAno: d.mes && d.ano ? `${d.ano}-${String(d.mes).padStart(2, '0')}` : (d.mesAno || ''),
+        aproveitamento: d.percentual ?? d.aproveitamento ?? 0,
         observacoes: d.observacoes || ''
       }));
       setAproveitamentoMensal(mappedAprov);
@@ -178,15 +188,21 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     }
 
     try {
+      // Separar "YYYY-MM" em ano e mes (campos reais da collection)
+      const [anoStr, mesStr] = aprovForm.mesAno.split('-');
+      const anoNum = parseInt(anoStr);
+      const mesNum = parseInt(mesStr);
+
       if (aprovForm.id) {
         console.log('📤 [Appwrite] Atualizando aprov:', aprovForm.id);
         const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, aprovForm.id, {
-          mesAno: aprovForm.mesAno,
-          aproveitamento: val,
+          mes: mesNum,
+          ano: anoNum,
+          percentual: val,
           observacoes: aprovForm.observacoes || null
         });
         console.log('✅ [Appwrite] Aprov atualizado:', doc.$id);
-        setAproveitamentoMensal(prev => prev.map(a => a.id === aprovForm.id ? { ...doc, id: doc.$id } : a));
+        setAproveitamentoMensal(prev => prev.map(a => a.id === aprovForm.id ? { ...doc, id: doc.$id, mesAno: aprovForm.mesAno, aproveitamento: val, observacoes: aprovForm.observacoes || '' } : a));
         mostrarToast('✅ Aproveitamento atualizado!');
       } else {
         console.log('📤 [Appwrite] Criando aprov:', aprovForm.mesAno);
@@ -196,8 +212,9 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
           ID.unique(),
           {
             userId: user.$id,
-            mesAno: aprovForm.mesAno,
-            aproveitamento: val,
+            mes: mesNum,
+            ano: anoNum,
+            percentual: val,
             observacoes: aprovForm.observacoes || null
           },
           [
@@ -207,7 +224,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
           ]
         );
         console.log('✅ [Appwrite] Aprov criado:', doc.$id);
-        setAproveitamentoMensal(prev => [...prev, { ...doc, id: doc.$id }]);
+        setAproveitamentoMensal(prev => [...prev, { ...doc, id: doc.$id, mesAno: aprovForm.mesAno, aproveitamento: val, observacoes: aprovForm.observacoes || '' }]);
         mostrarToast('✅ Aproveitamento salvo com sucesso!');
       }
       setAprovForm({ id: null, mesAno: '', aproveitamento: '', observacoes: '' });
@@ -452,7 +469,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
           <div className="form-row">
             <div className="form-group">
               <label className="label">Mês/Ano</label>
-              <input className="input" placeholder="Ex: Jun/2026" value={aprovForm.mesAno} onChange={e => setAprovForm({ ...aprovForm, mesAno: e.target.value })} />
+              <input type="month" className="input" value={aprovForm.mesAno} onChange={e => setAprovForm({ ...aprovForm, mesAno: e.target.value })} />
             </div>
             <div className="form-group">
               <label className="label">Aproveitamento (%)</label>
@@ -487,7 +504,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
             <div className="text-muted text-xs mt-1">Média 6 Meses</div>
           </div>
           <div className="card" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent-green)' }}>{aprovStats.best.mesAno}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--accent-green)' }}>{formatarMesAno(aprovStats.best.mesAno)}</div>
             <div style={{ fontSize: 13, fontWeight: 700 }}>{aprovStats.best.aproveitamento}%</div>
             <div className="text-muted text-xs">Melhor Mês</div>
           </div>
@@ -544,7 +561,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
             <tbody>
               {aprovData.slice().reverse().map(item => (
                 <tr key={item.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                  <td style={{ padding: '12px 4px', fontSize: 13, fontWeight: 500 }}>{item.mesAno}</td>
+                  <td style={{ padding: '12px 4px', fontSize: 13, fontWeight: 500 }}>{formatarMesAno(item.mesAno)}</td>
                   <td style={{ padding: '12px 4px' }}>
                     <span className="badge" style={{ 
                       background: item.aproveitamento >= 80 ? 'rgba(16,185,129,0.1)' : item.aproveitamento >= 60 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
