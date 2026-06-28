@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   LayoutDashboard, TrendingUp, TrendingDown, CreditCard, Landmark, Target,
   CheckSquare, Settings, Moon, Sun, Menu, X, DollarSign, PiggyBank,
-  BarChart3, Wallet, Shield, Award
+  BarChart3, Wallet, Shield, Award, HelpCircle
 } from 'lucide-react';
 
 const navItems = [
@@ -15,6 +15,7 @@ const navItems = [
   { id: 'dividas', label: 'Dívidas', icon: Shield, section: 'Patrimônio' },
   { id: 'metas', label: 'Metas', icon: Target, section: 'Planejamento' },
   { id: 'produtividade', label: 'Produtividade', icon: CheckSquare, section: 'Planejamento' },
+  { id: 'instrucoes', label: 'Como Usar', icon: HelpCircle, section: 'Sistema' },
   { id: 'feedback', label: 'Feedback', icon: CheckSquare, section: 'Sistema' },
 ];
 

@@ -10,6 +10,7 @@ import Dividas from './components/Dividas';
 import Metas from './components/Metas';
 import Produtividade from './components/Produtividade';
 import Feedback from './components/Feedback';
+import Instrucoes from './components/Instrucoes';
 import ToastContainer from './components/Toast';
 import StatusConexao from './components/StatusConexao';
 import { initVerificarPersistencia } from './utils/verificarPersistencia';
@@ -278,6 +279,8 @@ function FinanceApp({ user, logout }) {
         return <Produtividade tarefas={tarefas} setTarefas={setTarefas} habitos={habitos} setHabitos={setHabitos} aproveitamentoMensal={aproveitamentoMensal} setAproveitamentoMensal={setAproveitamentoMensal} user={user} />;
       case 'feedback':
         return <Feedback user={user} />;
+      case 'instrucoes':
+        return <Instrucoes />;
       default:
         return null;
     }

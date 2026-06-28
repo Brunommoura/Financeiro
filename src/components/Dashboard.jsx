@@ -100,6 +100,8 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
 
   const [userName, setUserName] = useState('');
   const [userId, setUserId] = useState(null);
+  const [dateStart, setDateStart] = useState('');
+  const [dateEnd, setDateEnd] = useState('');
   const [coresReceitas, setCoresReceitas] = useState({});
   const [coresDespesas, setCoresDespesas] = useState({});
   const [dadosEvolucao, setDadosEvolucao] = useState([]);
@@ -232,14 +234,28 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   const filteredReceitas = useMemo(() => {
     if (viewMode === 'mensal') return receitas.filter(r => getMonthKey(r.data) === selectedMonth);
     if (viewMode === 'anual') return receitas.filter(r => r.data && String(new Date(r.data).getFullYear()) === String(selectedYear));
+    if (viewMode === 'periodo') return receitas.filter(r => {
+      if (!r.data) return false;
+      const d = r.data.split('T')[0];
+      if (dateStart && d < dateStart) return false;
+      if (dateEnd && d > dateEnd) return false;
+      return true;
+    });
     return receitas;
-  }, [receitas, viewMode, selectedMonth, selectedYear]);
+  }, [receitas, viewMode, selectedMonth, selectedYear, dateStart, dateEnd]);
 
   const filteredDespesas = useMemo(() => {
     if (viewMode === 'mensal') return despesas.filter(d => getMonthKey(d.data) === selectedMonth);
     if (viewMode === 'anual') return despesas.filter(d => d.data && String(new Date(d.data).getFullYear()) === String(selectedYear));
+    if (viewMode === 'periodo') return despesas.filter(d => {
+      if (!d.data) return false;
+      const dd = d.data.split('T')[0];
+      if (dateStart && dd < dateStart) return false;
+      if (dateEnd && dd > dateEnd) return false;
+      return true;
+    });
     return despesas;
-  }, [despesas, viewMode, selectedMonth, selectedYear]);
+  }, [despesas, viewMode, selectedMonth, selectedYear, dateStart, dateEnd]);
 
   const totalReceitas = useMemo(() => filteredReceitas.reduce((s, r) => s + r.valor, 0), [filteredReceitas]);
   const totalDespesas = useMemo(() => filteredDespesas.reduce((s, d) => s + d.valor, 0), [filteredDespesas]);
@@ -319,7 +335,6 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   const tarefasHoje = tarefas.filter(t => t.data === new Date().toISOString().split('T')[0]);
   const tarefasConcluidas = tarefas.filter(t => t.status === 'Concluída').length;
   const taxaConclusao = tarefas.length > 0 ? (tarefasConcluidas / tarefas.length) * 100 : 0;
-  const streakMax = habitos.reduce((max, h) => Math.max(max, h.streak), 0);
 
   const prodData = [
     { name: 'Concluídas', value: tarefasConcluidas, fill: '#10b981' },
@@ -341,6 +356,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
             <button className={`tab-btn ${viewMode === 'geral' ? 'active' : ''}`} onClick={() => setViewMode('geral')}>Visão Geral</button>
             <button className={`tab-btn ${viewMode === 'anual' ? 'active' : ''}`} onClick={() => setViewMode('anual')}>Anual</button>
             <button className={`tab-btn ${viewMode === 'mensal' ? 'active' : ''}`} onClick={() => setViewMode('mensal')}>Mensal</button>
+            <button className={`tab-btn ${viewMode === 'periodo' ? 'active' : ''}`} onClick={() => setViewMode('periodo')}>Período</button>
           </div>
           {viewMode === 'mensal' && (
             <select className="input" style={{ width: 'auto' }} value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
@@ -355,6 +371,16 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
                 <option key={y} value={y}>{y}</option>
               ))}
             </select>
+          )}
+          {viewMode === 'periodo' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <input type="date" className="input" style={{ width: 'auto' }} value={dateStart} onChange={e => setDateStart(e.target.value)} title="Data inicial" />
+              <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>até</span>
+              <input type="date" className="input" style={{ width: 'auto' }} value={dateEnd} onChange={e => setDateEnd(e.target.value)} title="Data final" />
+              {(dateStart || dateEnd) && (
+                <button className="btn btn-ghost btn-sm" onClick={() => { setDateStart(''); setDateEnd(''); }} title="Limpar período">✕</button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -631,7 +657,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
       </div>
 
       {/* Produtividade */}
-      <div className="grid-2 mb-6">
+      <div className="mb-6">
         <div className="card">
           <div className="section-title mb-4">Produtividade</div>
           <div className="grid-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
@@ -644,12 +670,12 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
               <div className="text-muted text-xs">Taxa Conclusão</div>
             </div>
             <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-blue)' }}>{streakMax}</div>
-              <div className="text-muted text-xs">Streak Max 🔥</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-blue)' }}>{tarefas.length}</div>
+              <div className="text-muted text-xs">Total Tarefas</div>
             </div>
             <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8, textAlign: 'center' }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-purple)' }}>{habitos.filter(h => h.completadoHoje).length}</div>
-              <div className="text-muted text-xs">Hábitos Hoje</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-purple)' }}>{tarefas.length - tarefasConcluidas}</div>
+              <div className="text-muted text-xs">Pendentes</div>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={140}>
@@ -679,28 +705,6 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
               </ResponsiveContainer>
             </div>
           )}
-        </div>
-
-        <div className="card">
-          <div className="section-title mb-4">Hábitos & Streaks</div>
-          {habitos.map(h => (
-            <div key={h.id} style={{ marginBottom: 14 }}>
-              <div className="flex justify-between items-center mb-2">
-                <div className="flex items-center gap-2">
-                  <span>{h.completadoHoje ? '✅' : '⭕'}</span>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{h.nome}</span>
-                </div>
-                <span style={{ fontSize: 12, color: 'var(--accent-yellow)', fontWeight: 700 }}>🔥 {h.streak} dias</span>
-              </div>
-              <div className="progress-bar" style={{ height: 5 }}>
-                <div className="progress-fill" style={{
-                  width: `${Math.min(100, (h.streak / h.meta) * 100)}%`,
-                  background: h.completadoHoje ? 'var(--accent-green)' : 'var(--accent-yellow)'
-                }} />
-              </div>
-              <div className="text-muted text-xs mt-1">{h.streak}/{h.meta} dias</div>
-            </div>
-          ))}
         </div>
       </div>
     </div>

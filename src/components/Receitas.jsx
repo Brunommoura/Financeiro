@@ -13,6 +13,12 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
   const [search, setSearch] = useState('');
   const [filtCat, setFiltCat] = useState('');
   const [filtMes, setFiltMes] = useState('');
+
+  // Edição em massa
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isMassEditing, setIsMassEditing] = useState(false);
+  const [isMassDeleting, setIsMassDeleting] = useState(false);
+  const [massEditForm, setMassEditForm] = useState({ categoria: '', recorrente: '' });
   
   const [form, setForm] = useState({ 
     data: new Date().toISOString().split('T')[0], 
@@ -243,6 +249,57 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
     return cat ? cat.color : 'var(--accent-green)';
   };
 
+  // ===== Edição em massa =====
+  const toggleSelectAll = (e) => {
+    if (e.target.checked) setSelectedIds(filtered.map(r => r.id));
+    else setSelectedIds([]);
+  };
+
+  const toggleSelectRow = (id) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const handleMassUpdate = async () => {
+    if (!massEditForm.categoria && massEditForm.recorrente === '') {
+      alert('Selecione ao menos um campo para alterar.');
+      return;
+    }
+    const updates = {};
+    if (massEditForm.categoria) updates.categoria = massEditForm.categoria;
+    if (massEditForm.recorrente !== '') updates.recorrente = massEditForm.recorrente === 'sim';
+
+    setIsMassEditing(true);
+    try {
+      await Promise.all(selectedIds.map(id => appwriteService.atualizar(COLLECTIONS.RECEITAS, id, updates)));
+      setReceitas(prev => prev.map(r => selectedIds.includes(r.id) ? { ...r, ...updates } : r));
+      alert(`✅ ${selectedIds.length} receita(s) atualizada(s) com sucesso!`);
+      setSelectedIds([]);
+      setMassEditForm({ categoria: '', recorrente: '' });
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao atualizar receitas.');
+    } finally {
+      setIsMassEditing(false);
+    }
+  };
+
+  const handleMassDelete = async () => {
+    if (!window.confirm(`⚠️ Tem certeza que deseja excluir ${selectedIds.length} receita(s)?\n\nEsta ação não pode ser desfeita.`)) return;
+    setIsMassDeleting(true);
+    try {
+      await appwriteService.deletarVarios(COLLECTIONS.RECEITAS, selectedIds);
+      setReceitas(prev => prev.filter(r => !selectedIds.includes(r.id)));
+      alert(`🗑 ${selectedIds.length} receita(s) excluída(s) com sucesso!`);
+      setSelectedIds([]);
+      setMassEditForm({ categoria: '', recorrente: '' });
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao excluir receitas.');
+    } finally {
+      setIsMassDeleting(false);
+    }
+  };
+
   return (
     <div className="animate-fade">
       <div className="section-header mb-4">
@@ -388,6 +445,11 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
           <table>
             <thead>
               <tr>
+                <th style={{ width: 36, textAlign: 'center' }}>
+                  <input type="checkbox"
+                    checked={filtered.length > 0 && selectedIds.length === filtered.length}
+                    onChange={toggleSelectAll} />
+                </th>
                 <th>Data</th>
                 <th>Descrição</th>
                 <th>Categoria</th>
@@ -399,12 +461,16 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={7} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>Nenhum registro encontrado</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>Nenhum registro encontrado</td></tr>
               )}
               {filtered.map(r => {
                 const color = getCategoryColor(r.categoria);
+                const isSelected = selectedIds.includes(r.id);
                 return (
-                  <tr key={r.id} style={{ background: editingId === r.id ? 'rgba(16,185,129,0.05)' : 'transparent' }}>
+                  <tr key={r.id} style={{ background: isSelected ? 'rgba(16,185,129,0.08)' : editingId === r.id ? 'rgba(16,185,129,0.05)' : 'transparent' }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelectRow(r.id)} />
+                    </td>
                     <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(r.data)}</td>
                     <td style={{ fontWeight: 500 }}>{r.descricao}</td>
                     <td>
@@ -434,7 +500,7 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={5} style={{ fontWeight: 700, paddingTop: 12, borderTop: '2px solid var(--border)' }}>Total</td>
+                <td colSpan={6} style={{ fontWeight: 700, paddingTop: 12, borderTop: '2px solid var(--border)' }}>Total</td>
                 <td style={{ textAlign: 'right', fontWeight: 800, color: 'var(--accent-green)', fontSize: 15, borderTop: '2px solid var(--border)' }}>{formatCurrency(total)}</td>
                 <td style={{ borderTop: '2px solid var(--border)' }}></td>
               </tr>
@@ -442,6 +508,48 @@ export default function Receitas({ receitas, setReceitas, categories, setCategor
           </table>
         </div>
       </div>
+
+      {/* Barra de edição em massa */}
+      {selectedIds.length > 0 && (
+        <div style={{
+          position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: '12px 16px', zIndex: 50,
+          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', maxWidth: '95vw'
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>
+            {selectedIds.length} receita(s) selecionada(s)
+          </span>
+
+          <select className="input" style={{ width: 'auto', minWidth: 130 }}
+            value={massEditForm.categoria}
+            onChange={e => setMassEditForm({ ...massEditForm, categoria: e.target.value })}>
+            <option value="">Categoria…</option>
+            {categories.income.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+
+          <select className="input" style={{ width: 'auto', minWidth: 120 }}
+            value={massEditForm.recorrente}
+            onChange={e => setMassEditForm({ ...massEditForm, recorrente: e.target.value })}>
+            <option value="">Recorrente…</option>
+            <option value="sim">Sim</option>
+            <option value="nao">Não</option>
+          </select>
+
+          <button className="btn btn-primary" onClick={handleMassUpdate} disabled={isMassEditing || isMassDeleting}>
+            {isMassEditing ? <Loader2 size={16} className="spin" /> : '✅ Aplicar'}
+          </button>
+
+          <button onClick={handleMassDelete} disabled={isMassEditing || isMassDeleting}
+            style={{ background: 'var(--accent-red)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: (isMassEditing || isMassDeleting) ? 0.6 : 1 }}>
+            {isMassDeleting ? <Loader2 size={16} className="spin" /> : <><Trash2 size={14} /> Excluir</>}
+          </button>
+
+          <button className="btn btn-ghost" onClick={() => { setSelectedIds([]); setMassEditForm({ categoria: '', recorrente: '' }); }} disabled={isMassEditing || isMassDeleting}>
+            ✕ Cancelar
+          </button>
+        </div>
+      )}
     </div>
   );
 }

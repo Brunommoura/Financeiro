@@ -108,38 +108,46 @@ export const formatMonthLabel = (monthKey) => {
 
 export const calcNextInstallments = (parcelamentos, despesas) => {
   if (!despesas) return [];
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+
+  // Despesas parceladas pendentes (vínculo correto: parcelamentoId)
   const novasPendentes = despesas
-    .filter(d => d.tipo === 'Parcelada' && d.status === 'Pendente' && d.installmentId)
+    .filter(d => d.tipo === 'Parcelada' && d.status === 'Pendente' && (d.parcelamentoId || d.installmentId))
     .sort((a, b) => new Date(a.data) - new Date(b.data))
     .map(d => {
-      const master = parcelamentos.find(p => p.id === d.installmentId);
-      const match = d.descricao.match(/Parcela (\d+\/\d+)/);
+      const vinculo = d.parcelamentoId || d.installmentId;
+      const master = (parcelamentos || []).find(p => (p.id || p.$id) === vinculo);
+      const match = (d.descricao || '').match(/Parcela (\d+\/\d+)/);
       return {
-        id: d.id,
-        nome: master ? master.description || master.nome : d.descricao.split(' -')[0],
+        id: d.id || d.$id,
+        nome: master ? (master.descricao || master.description || master.nome) : (d.descricao || '').split(' -')[0],
         numeroParcela: match ? `Parcela ${match[1]}` : 'Parcela',
         proximaData: d.data,
         valorParcela: d.valor,
-        parcelasRestantes: master ? despesas.filter(x => x.installmentId === master.id && x.status === 'Pendente').length : 0
+        parcelasRestantes: master
+          ? despesas.filter(x => (x.parcelamentoId || x.installmentId) === vinculo && x.status === 'Pendente').length
+          : 0
       };
     });
 
   if (novasPendentes.length > 0) return novasPendentes.slice(0, 5);
 
-  return parcelamentos
-    .filter(p => (p.parcelasPagas || 0) < (p.parcelas || p.installmentCount || 0))
+  // Fallback: calcular a partir dos parcelamentos master
+  return (parcelamentos || [])
+    .filter(p => (p.parcelasPagas || 0) < (p.numeroParcelas || p.parcelas || p.installmentCount || 0))
     .map(p => {
-       const count = p.parcelas || p.installmentCount || 0;
+       const count = p.numeroParcelas || p.parcelas || p.installmentCount || 0;
        const pagas = p.parcelasPagas || 0;
        const firstDate = new Date(p.dataPrimeiraParcela || p.startDate || new Date().toISOString().split('T')[0]);
        const nextDate = new Date(firstDate);
        nextDate.setMonth(firstDate.getMonth() + pagas);
        return {
-         id: p.id,
-         nome: p.description || p.nome,
+         id: p.id || p.$id,
+         nome: p.descricao || p.description || p.nome,
          numeroParcela: `Parcela ${pagas + 1}/${count}`,
          proximaData: nextDate.toISOString().split('T')[0],
-         valorParcela: p.installmentValue || p.valorParcela || 0,
+         valorParcela: p.valorParcela || p.installmentValue || 0,
          parcelasRestantes: count - pagas
        };
     })
