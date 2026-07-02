@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Plus, Trash2, CheckCircle, Clock, Circle, Edit2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine } from 'recharts';
 import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
+import { formatDate, toISODate } from '../utils/helpers';
 import { mostrarToast } from './Toast';
 
 const CATEGORIAS = ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro'];
@@ -257,7 +258,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
 
   const filtered = useMemo(() => {
     if (activeFilter === 'Todas') return tarefas;
-    if (activeFilter === 'Hoje') return tarefas.filter(t => t.data === hoje);
+    if (activeFilter === 'Hoje') return tarefas.filter(t => toISODate(t.data) === hoje);
     return tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
   }, [tarefas, activeFilter, hoje]);
 
@@ -265,7 +266,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
   const streakMax = 0;
   const tempoTotal = concluidas.reduce((s, t) => s + (t.tempoReal || t.tempoEstimado), 0);
-  const hojeCompletas = tarefas.filter(t => t.data === hoje && t.status === 'Concluída').length;
+  const hojeCompletas = tarefas.filter(t => toISODate(t.data) === hoje && t.status === 'Concluída').length;
 
   const catData = useMemo(() => CATEGORIAS.map(cat => ({
     name: cat,
@@ -440,7 +441,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
                 <div className="flex gap-2 mt-1 flex-wrap">
                   <span className="badge badge-gray" style={{ fontSize: 10 }}>{t.categoria}</span>
                   <span className="badge" style={{ fontSize: 10, background: `${priorColor[t.prioridade]}22`, color: priorColor[t.prioridade] }}>{t.prioridade}</span>
-                  {t.data && <span className="text-muted text-xs">{t.data.split('-').reverse().join('/')}</span>}
+                  {t.data && <span className="text-muted text-xs">{formatDate(t.data)}</span>}
                   {t.tempoEstimado > 0 && <span className="text-muted text-xs">⏱️ {t.tempoEstimado}min</span>}
                 </div>
               </div>

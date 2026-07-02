@@ -13,10 +13,29 @@ export const formatPercent = (value, decimals = 1) => {
 };
 
 // Formata data de ISO para DD/MM/YYYY
+// Normaliza qualquer data (com ou sem timestamp) para "YYYY-MM-DD"
+// Evita problemas de fuso horário ao usar apenas a parte da data
+export const toISODate = (value) => {
+  if (!value) return '';
+  // Se já é string, pegar só a parte antes do 'T'
+  if (typeof value === 'string') {
+    return value.split('T')[0];
+  }
+  // Se é objeto Date, montar manualmente em horário local (sem UTC shift)
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+};
+
 export const formatDate = (dateStr) => {
   if (!dateStr) return '';
-  const datePart = dateStr.split('T')[0];
+  const datePart = String(dateStr).split('T')[0];
   const [y, m, d] = datePart.split('-');
+  if (!y || !m || !d) return '';
   return `${d}/${m}/${y}`;
 };
 

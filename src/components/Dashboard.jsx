@@ -166,13 +166,14 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
       ]);
 
       const mesesList = [];
+      const agora = new Date();
       for (let i = 5; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
+        // Usar UTC de forma consistente com a comparação das transações abaixo
+        const d = new Date(Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth() - i, 1));
         mesesList.push({
-          mes: d.getMonth(),
-          ano: d.getFullYear(),
-          label: d.toLocaleString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', '').replace(' ', '/'),
+          mes: d.getUTCMonth(),
+          ano: d.getUTCFullYear(),
+          label: d.toLocaleString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' }).replace('.', '').replace(' ', '/'),
           receitas: 0,
           despesas: 0,
           saldo: 0
@@ -233,7 +234,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   // Filter by month/view/year
   const filteredReceitas = useMemo(() => {
     if (viewMode === 'mensal') return receitas.filter(r => getMonthKey(r.data) === selectedMonth);
-    if (viewMode === 'anual') return receitas.filter(r => r.data && String(new Date(r.data).getFullYear()) === String(selectedYear));
+    if (viewMode === 'anual') return receitas.filter(r => r.data && String(r.data).slice(0, 4) === String(selectedYear));
     if (viewMode === 'periodo') return receitas.filter(r => {
       if (!r.data) return false;
       const d = r.data.split('T')[0];
@@ -246,7 +247,7 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
 
   const filteredDespesas = useMemo(() => {
     if (viewMode === 'mensal') return despesas.filter(d => getMonthKey(d.data) === selectedMonth);
-    if (viewMode === 'anual') return despesas.filter(d => d.data && String(new Date(d.data).getFullYear()) === String(selectedYear));
+    if (viewMode === 'anual') return despesas.filter(d => d.data && String(d.data).slice(0, 4) === String(selectedYear));
     if (viewMode === 'periodo') return despesas.filter(d => {
       if (!d.data) return false;
       const dd = d.data.split('T')[0];

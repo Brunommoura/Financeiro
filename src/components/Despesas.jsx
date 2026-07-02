@@ -59,7 +59,7 @@ const UltimasDespesas = ({ despesas }) => {
                   <div>
                     <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', margin: 0 }}>{d.descricao}</p>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                      {new Date(d.data).toLocaleDateString('pt-BR')} · {d.categoria}
+                      {formatDate(d.data)} · {d.categoria}
                     </p>
                   </div>
                 </div>
@@ -127,19 +127,21 @@ export default function Despesas({ despesas, setDespesas, categories, setCategor
     if (search && !d.descricao.toLowerCase().includes(search.toLowerCase())) return false;
     
     if (filtMes) {
-      let dataReferencia = new Date(d.data);
+      // Usar a parte YYYY-MM da string diretamente, sem converter para Date
+      // (converter para Date desloca a data por causa do fuso horário)
+      let dataReferencia = d.data;
       if (
         considerarVencimentoCartao &&
         d.dataVencimentoCartao &&
         (d.formaPagamento === 'Cartão de Crédito' || d.pagamento === 'Crédito' || d.cartaoId)
       ) {
-        dataReferencia = new Date(d.dataVencimentoCartao);
+        dataReferencia = d.dataVencimentoCartao;
       }
-      
-      if (!dataReferencia || isNaN(dataReferencia.getTime())) return false;
-      
-      const [y, mo] = filtMes.split('-');
-      if (dataReferencia.getMonth() + 1 !== parseInt(mo) || dataReferencia.getFullYear() !== parseInt(y)) {
+
+      if (!dataReferencia) return false;
+
+      // getMonthKey normaliza "2026-07-01T..." → "2026-07"
+      if (getMonthKey(dataReferencia) !== filtMes) {
         return false;
       }
     }
