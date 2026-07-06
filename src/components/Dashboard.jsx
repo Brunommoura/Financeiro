@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Area, AreaChart, BarChart, Bar, ReferenceLine
 } from 'recharts';
-import { formatCurrency, formatPercent, getMonthKey, formatMonthLabel, calcNextInstallments } from '../utils/helpers';
+import { formatCurrency, formatPercent, getMonthKey, formatMonthLabel, formatDate, calcNextInstallments } from '../utils/helpers';
 import { account, databases, COLLECTIONS, DATABASE_ID, Query } from '../lib/appwrite';
 
 const gerarCorPadrao = (nome) => {
@@ -229,7 +229,16 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   }, [evolucaoData]);
 
   // Aproveitamento mini-data
-  const aprovData = useMemo(() => (aproveitamentoMensal || []).slice().sort((a, b) => a.id - b.id), [aproveitamentoMensal]);
+  const aprovData = useMemo(() => (aproveitamentoMensal || []).slice().sort((a, b) => (a.mesAno || '').localeCompare(b.mesAno || '')), [aproveitamentoMensal]);
+
+  // Formata "2026-07" → "Jul/26"
+  const fmtMesAno = (mesAno) => {
+    if (!mesAno || !mesAno.includes('-')) return mesAno || '';
+    const [ano, mes] = mesAno.split('-');
+    const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const idx = parseInt(mes) - 1;
+    return idx >= 0 && idx < 12 ? `${nomes[idx]}/${ano.slice(2)}` : mesAno;
+  };
 
   // Filter by month/view/year
   const filteredReceitas = useMemo(() => {
@@ -292,7 +301,10 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
   // Patrimônio por tipo
   const patrimonioByTipo = useMemo(() => {
     const map = {};
-    patrimonio.forEach(p => { map[p.tipo] = (map[p.tipo] || 0) + p.valorAtual; });
+    patrimonio.forEach(p => {
+      const tipo = p.tipoAtivo || p.tipo || 'Outros';
+      map[tipo] = (map[tipo] || 0) + (p.valorAtual || 0);
+    });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [patrimonio]);
 
@@ -584,18 +596,23 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
 
         <div className="card">
           <div className="section-title mb-4">Próximos Parcelamentos</div>
-          {proxParcelamentos.slice(0, 5).map(p => (
-            <div key={p.id} className="stat-row">
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{p.nome}</div>
-                <div className="text-muted text-xs">{p.numeroParcela} · Vence {p.proximaData.split('-').reverse().join('/')}</div>
+          <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
+            {proxParcelamentos.length === 0 && (
+              <div className="text-muted text-xs" style={{ padding: '8px 0' }}>Nenhum parcelamento pendente.</div>
+            )}
+            {proxParcelamentos.map(p => (
+              <div key={p.id} className="stat-row">
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.nome}</div>
+                  <div className="text-muted text-xs">{p.numeroParcela} · Vence {formatDate(p.proximaData)}</div>
+                </div>
+                <div className="text-right">
+                  <div style={{ fontWeight: 700, color: 'var(--accent-purple)' }}>{formatCurrency(p.valorParcela)}</div>
+                  <div className="text-muted text-xs">{p.parcelasRestantes} restantes</div>
+                </div>
               </div>
-              <div className="text-right">
-                <div style={{ fontWeight: 700, color: 'var(--accent-purple)' }}>{formatCurrency(p.valorParcela)}</div>
-                <div className="text-muted text-xs">{p.parcelasRestantes} restantes</div>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
           <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(139,92,246,0.1)', borderRadius: 8 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               Total próximo mês: <strong style={{ color: 'var(--accent-purple)' }}>
@@ -695,9 +712,9 @@ export default function Dashboard({ data, viewMode, setViewMode, selectedMonth, 
               <ResponsiveContainer width="100%" height={120}>
                 <LineChart data={aprovData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="mesAno" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} />
+                  <XAxis dataKey="mesAno" tickFormatter={fmtMesAno} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} />
                   <YAxis domain={[0, 100]} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickFormatter={v => `${v}%`} />
-                  <Tooltip formatter={v => `${v}%`} />
+                  <Tooltip formatter={v => `${v}%`} labelFormatter={fmtMesAno} />
                   <Line type="monotone" dataKey="aproveitamento" name="Aproveit." stroke="#8b5cf6" strokeWidth={2} dot={({ cx, cy, payload }) => {
                     const color = payload.aproveitamento >= 80 ? '#10b981' : payload.aproveitamento >= 60 ? '#f59e0b' : '#ef4444';
                     return <circle cx={cx} cy={cy} r={5} fill={color} stroke="none" />;

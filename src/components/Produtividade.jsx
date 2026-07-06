@@ -37,6 +37,11 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   });
 
   const hoje = new Date().toISOString().split('T')[0];
+  const ontem = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  })();
 
   useEffect(() => {
     const temDadosFalsosTarefas = tarefas.some(t => !t.$id);
@@ -259,8 +264,9 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const filtered = useMemo(() => {
     if (activeFilter === 'Todas') return tarefas;
     if (activeFilter === 'Hoje') return tarefas.filter(t => toISODate(t.data) === hoje);
+    if (activeFilter === 'Ontem') return tarefas.filter(t => toISODate(t.data) === ontem);
     return tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
-  }, [tarefas, activeFilter, hoje]);
+  }, [tarefas, activeFilter, hoje, ontem]);
 
   const concluidas = tarefas.filter(t => t.status === 'Concluída');
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
@@ -275,8 +281,8 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   })), [tarefas]);
 
   const aprovData = useMemo(() => [...aproveitamentoMensal].sort((a, b) => {
-    // Ordenar cronologicamente se possível, ou por ID
-    return a.id > b.id ? 1 : -1;
+    // Ordenar cronologicamente crescente por mesAno ("YYYY-MM")
+    return (a.mesAno || '').localeCompare(b.mesAno || '');
   }), [aproveitamentoMensal]);
   
   const aprovStats = useMemo(() => {
@@ -407,7 +413,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
 
       {/* Filtros de tarefas */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {['Todas', 'Hoje', 'Pendente', 'Em andamento', 'Concluída', ...CATEGORIAS].map(f => (
+        {['Todas', 'Hoje', 'Ontem', 'Pendente', 'Em andamento', 'Concluída', ...CATEGORIAS].map(f => (
           <button key={f} className={`tab-btn ${activeFilter === f ? 'active' : ''}`} onClick={() => setActiveFilter(f)}>
             {f}
           </button>
@@ -533,9 +539,9 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={filteredAprovData} margin={{ top: 5, right: 20, bottom: 5, left: -20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="mesAno" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                <XAxis dataKey="mesAno" tickFormatter={formatarMesAno} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
                 <YAxis domain={[0, 100]} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${v}%`} />
-                <Tooltip formatter={v => [`${v}%`, 'Aproveitamento']} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
+                <Tooltip formatter={v => [`${v}%`, 'Aproveitamento']} labelFormatter={formatarMesAno} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
                 <ReferenceLine y={avgFilteredAprov} stroke="var(--text-muted)" strokeDasharray="3 3" label={{ position: 'top', value: 'Média', fill: 'var(--text-muted)', fontSize: 10 }} />
                 <Line type="monotone" dataKey="aproveitamento" stroke="#8b5cf6" strokeWidth={3} dot={({ cx, cy, payload }) => {
                   const color = payload.aproveitamento >= 80 ? '#10b981' : payload.aproveitamento >= 60 ? '#f59e0b' : '#ef4444';

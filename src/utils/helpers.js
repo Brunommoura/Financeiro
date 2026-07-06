@@ -150,7 +150,7 @@ export const calcNextInstallments = (parcelamentos, despesas) => {
       };
     });
 
-  if (novasPendentes.length > 0) return novasPendentes.slice(0, 5);
+  if (novasPendentes.length > 0) return novasPendentes.slice(0, 30);
 
   // Fallback: calcular a partir dos parcelamentos master
   return (parcelamentos || [])
@@ -171,5 +171,5 @@ export const calcNextInstallments = (parcelamentos, despesas) => {
        };
     })
     .sort((a, b) => new Date(a.proximaData) - new Date(b.proximaData))
-    .slice(0, 5);
+    .slice(0, 30);
 };
