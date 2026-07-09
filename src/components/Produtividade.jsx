@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Plus, Trash2, CheckCircle, Clock, Circle, Edit2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Plus, Trash2, CheckCircle, Clock, Circle, Edit2, TrendingUp, TrendingDown, Minus, GripVertical, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine } from 'recharts';
 import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
 import { formatDate, toISODate } from '../utils/helpers';
@@ -30,6 +30,21 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     return idx >= 0 && idx < 12 ? `${nomesMeses[idx]}/${ano}` : mesAno;
   };
   const [activeFilter, setActiveFilter] = useState('Todas');
+  const [editingId, setEditingId] = useState(null);
+  const [draggedId, setDraggedId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const [taskOrder, setTaskOrder] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('prodTaskOrder') || '[]'); } catch { return []; }
+  });
+  const [categoriasCustom, setCategoriasCustom] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('prodCategorias') || 'null');
+      return Array.isArray(saved) && saved.length ? saved : ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro'];
+    } catch { return ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro']; }
+  });
+  const [novaCategoria, setNovaCategoria] = useState('');
+  const [showCatManager, setShowCatManager] = useState(false);
+  const [taxaPeriodo, setTaxaPeriodo] = useState('hoje'); // hoje | ontem | semana | mes | todas
   const [form, setForm] = useState({
     titulo: '', categoria: 'Trabalho', prioridade: 'Média',
     status: 'Pendente', tempoEstimado: '', tempoReal: '',
@@ -42,6 +57,61 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     d.setDate(d.getDate() - 1);
     return d.toISOString().split('T')[0];
   })();
+
+  // Persistir categorias custom
+  useEffect(() => {
+    localStorage.setItem('prodCategorias', JSON.stringify(categoriasCustom));
+  }, [categoriasCustom]);
+
+  // Persistir ordem das tarefas
+  useEffect(() => {
+    localStorage.setItem('prodTaskOrder', JSON.stringify(taskOrder));
+  }, [taskOrder]);
+
+  const addCategoria = () => {
+    const nome = novaCategoria.trim();
+    if (!nome) return;
+    if (categoriasCustom.some(c => c.toLowerCase() === nome.toLowerCase())) {
+      mostrarToast('Essa categoria já existe.', 'erro');
+      return;
+    }
+    setCategoriasCustom(prev => [...prev, nome]);
+    setNovaCategoria('');
+    mostrarToast('✅ Categoria adicionada!');
+  };
+
+  const removeCategoria = (nome) => {
+    const emUso = tarefas.some(t => t.categoria === nome);
+    if (emUso) {
+      mostrarToast(`Categoria "${nome}" está em uso e não pode ser removida.`, 'erro');
+      return;
+    }
+    setCategoriasCustom(prev => prev.filter(c => c !== nome));
+    mostrarToast('🗑️ Categoria removida!');
+  };
+
+  // Drag & drop de tarefas
+  const handleDragStart = (id) => setDraggedId(id);
+  const handleDragOver = (e, id) => { e.preventDefault(); setDragOverId(id); };
+  const handleDragEnd = () => { setDraggedId(null); setDragOverId(null); };
+  const handleDrop = (e, targetId) => {
+    e.preventDefault();
+    if (!draggedId || draggedId === targetId) { handleDragEnd(); return; }
+    // Ordem atual dos ids visíveis
+    const ids = filtered.map(t => t.id);
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(targetId);
+    if (from === -1 || to === -1) { handleDragEnd(); return; }
+    const novaOrdem = [...ids];
+    novaOrdem.splice(from, 1);
+    novaOrdem.splice(to, 0, draggedId);
+    // Mesclar com ordem global existente
+    setTaskOrder(prev => {
+      const semVisiveis = prev.filter(id => !ids.includes(id));
+      return [...novaOrdem, ...semVisiveis];
+    });
+    handleDragEnd();
+  };
 
   useEffect(() => {
     const temDadosFalsosTarefas = tarefas.some(t => !t.$id);
@@ -105,48 +175,68 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     }
   };
 
+  const handleEdit = (t) => {
+    setEditingId(t.id);
+    setForm({
+      titulo: t.titulo || t.tarefa || '',
+      categoria: t.categoria || categoriasCustom[0],
+      prioridade: t.prioridade || 'Média',
+      status: t.status || 'Pendente',
+      tempoEstimado: t.tempoEstimado ? String(t.tempoEstimado) : '',
+      tempoReal: t.tempoReal ? String(t.tempoReal) : '',
+      data: toISODate(t.data) || hoje
+    });
+    setShowForm(true);
+  };
+
   const handleAdd = async () => {
     if (!form.titulo) return;
+    const dados = {
+      tarefa: form.titulo,
+      categoria: form.categoria,
+      prioridade: form.prioridade,
+      status: form.status,
+      data: form.data,
+      tempoEstimado: form.tempoEstimado !== '' && form.tempoEstimado != null ? parseInt(form.tempoEstimado) : 0,
+      tempoReal: form.tempoReal !== '' && form.tempoReal != null ? parseInt(form.tempoReal) : 0
+    };
+
     try {
-      console.log('📤 [Appwrite] Criando tarefa:', form.titulo);
-      const dadosTarefa = {
-        userId: user.$id,
-        tarefa: form.titulo,
-        categoria: form.categoria,
-        prioridade: form.prioridade,
-        status: form.status,
-        data: form.data,
-        tempoEstimado: form.tempoEstimado !== '' && form.tempoEstimado != null ? parseInt(form.tempoEstimado) : 0,
-        tempoReal: form.tempoReal !== '' && form.tempoReal != null ? parseInt(form.tempoReal) : 0
-      };
-      const doc = await databases.createDocument(
-        DATABASE_ID,
-        COLLECTIONS.PRODUTIVIDADE,
-        ID.unique(),
-        dadosTarefa,
-        [
-          Permission.read(Role.user(user.$id)),
-          Permission.update(Role.user(user.$id)),
-          Permission.delete(Role.user(user.$id))
-        ]
-      );
-      console.log('✅ [Appwrite] Tarefa criada:', doc.$id);
-      setTarefas(prev => [...prev, { 
-        ...doc, 
-        id: doc.$id,
-        tarefa: doc.tarefa, titulo: doc.tarefa,
-        categoria: doc.categoria,
-        prioridade: doc.prioridade,
-        status: doc.status,
-        data: doc.data,
-        tempoEstimado: doc.tempoEstimado,
-        tempoReal: doc.tempoReal
-      }]);
-      setForm({ titulo: '', categoria: 'Trabalho', prioridade: 'Média', status: 'Pendente', tempoEstimado: '', tempoReal: '', data: hoje });
+      if (editingId) {
+        // EDIÇÃO
+        console.log('📤 [Appwrite] Atualizando tarefa:', editingId);
+        const doc = await databases.updateDocument(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, editingId, dados);
+        setTarefas(prev => prev.map(t => t.id === editingId ? {
+          ...t, ...doc, id: doc.$id, titulo: doc.tarefa, tarefa: doc.tarefa
+        } : t));
+        mostrarToast('✅ Tarefa atualizada com sucesso!');
+      } else {
+        // CRIAÇÃO
+        console.log('📤 [Appwrite] Criando tarefa:', form.titulo);
+        const doc = await databases.createDocument(
+          DATABASE_ID,
+          COLLECTIONS.PRODUTIVIDADE,
+          ID.unique(),
+          { userId: user.$id, ...dados },
+          [
+            Permission.read(Role.user(user.$id)),
+            Permission.update(Role.user(user.$id)),
+            Permission.delete(Role.user(user.$id))
+          ]
+        );
+        console.log('✅ [Appwrite] Tarefa criada:', doc.$id);
+        setTarefas(prev => [...prev, {
+          ...doc, id: doc.$id, tarefa: doc.tarefa, titulo: doc.tarefa,
+          categoria: doc.categoria, prioridade: doc.prioridade, status: doc.status,
+          data: doc.data, tempoEstimado: doc.tempoEstimado, tempoReal: doc.tempoReal
+        }]);
+        mostrarToast('✅ Tarefa salva com sucesso!');
+      }
+      setForm({ titulo: '', categoria: categoriasCustom[0], prioridade: 'Média', status: 'Pendente', tempoEstimado: '', tempoReal: '', data: hoje });
+      setEditingId(null);
       setShowForm(false);
-      mostrarToast('✅ Tarefa salva com sucesso!');
     } catch (error) {
-      console.error('❌ [Appwrite] Falha ao criar tarefa:', error);
+      console.error('❌ [Appwrite] Falha ao salvar tarefa:', error);
       mostrarToast('❌ Erro ao salvar tarefa.', 'erro');
     }
   };
@@ -262,11 +352,22 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   };
 
   const filtered = useMemo(() => {
-    if (activeFilter === 'Todas') return tarefas;
-    if (activeFilter === 'Hoje') return tarefas.filter(t => toISODate(t.data) === hoje);
-    if (activeFilter === 'Ontem') return tarefas.filter(t => toISODate(t.data) === ontem);
-    return tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
-  }, [tarefas, activeFilter, hoje, ontem]);
+    let base;
+    if (activeFilter === 'Todas') base = tarefas;
+    else if (activeFilter === 'Hoje') base = tarefas.filter(t => toISODate(t.data) === hoje);
+    else if (activeFilter === 'Ontem') base = tarefas.filter(t => toISODate(t.data) === ontem);
+    else base = tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
+
+    // Aplicar ordem manual (drag & drop) quando houver
+    if (taskOrder.length > 0) {
+      const idx = id => {
+        const i = taskOrder.indexOf(id);
+        return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+      };
+      base = [...base].sort((a, b) => idx(a.id) - idx(b.id));
+    }
+    return base;
+  }, [tarefas, activeFilter, hoje, ontem, taskOrder]);
 
   const concluidas = tarefas.filter(t => t.status === 'Concluída');
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
@@ -274,7 +375,36 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const tempoTotal = concluidas.reduce((s, t) => s + (t.tempoReal || t.tempoEstimado), 0);
   const hojeCompletas = tarefas.filter(t => toISODate(t.data) === hoje && t.status === 'Concluída').length;
 
-  const catData = useMemo(() => CATEGORIAS.map(cat => ({
+  // Taxa de conclusão por período (card dedicado)
+  const taxaPeriodoStats = useMemo(() => {
+    const inicioSemana = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      return d.toISOString().split('T')[0];
+    })();
+    const inicioMes = (() => {
+      const d = new Date();
+      d.setDate(1);
+      return d.toISOString().split('T')[0];
+    })();
+
+    const filtro = (t) => {
+      const data = toISODate(t.data);
+      if (taxaPeriodo === 'hoje') return data === hoje;
+      if (taxaPeriodo === 'ontem') return data === ontem;
+      if (taxaPeriodo === 'semana') return data >= inicioSemana && data <= hoje;
+      if (taxaPeriodo === 'mes') return data >= inicioMes;
+      return true; // todas
+    };
+
+    const doPeriodo = tarefas.filter(filtro);
+    const conc = doPeriodo.filter(t => t.status === 'Concluída').length;
+    const total = doPeriodo.length;
+    const taxa = total > 0 ? (conc / total) * 100 : 0;
+    return { conc, total, taxa };
+  }, [tarefas, taxaPeriodo, hoje, ontem]);
+
+  const catData = useMemo(() => categoriasCustom.map(cat => ({
     name: cat,
     concluidas: tarefas.filter(t => t.categoria === cat && t.status === 'Concluída').length,
     pendentes: tarefas.filter(t => t.categoria === cat && t.status !== 'Concluída').length,
@@ -347,6 +477,41 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         ))}
       </div>
 
+      {/* Card: Taxa de Conclusão por Período */}
+      <div className="card mb-6">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div className="section-title" style={{ marginBottom: 4 }}>Taxa de Conclusão</div>
+            <div className="text-muted text-xs">
+              {taxaPeriodoStats.conc} de {taxaPeriodoStats.total} tarefa(s) concluída(s)
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{
+                fontSize: 32, fontWeight: 800,
+                color: taxaPeriodoStats.taxa >= 80 ? 'var(--accent-green)' : taxaPeriodoStats.taxa >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)'
+              }}>
+                {taxaPeriodoStats.taxa.toFixed(0)}%
+              </div>
+            </div>
+            <select className="input" style={{ width: 'auto' }} value={taxaPeriodo} onChange={e => setTaxaPeriodo(e.target.value)}>
+              <option value="hoje">Hoje</option>
+              <option value="ontem">Ontem</option>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Este mês</option>
+              <option value="todas">Todas</option>
+            </select>
+          </div>
+        </div>
+        <div className="progress-bar" style={{ marginTop: 12, height: 8 }}>
+          <div className="progress-fill" style={{
+            width: `${taxaPeriodoStats.taxa}%`,
+            background: taxaPeriodoStats.taxa >= 80 ? 'var(--accent-green)' : taxaPeriodoStats.taxa >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)'
+          }} />
+        </div>
+      </div>
+
       {/* Gráfico de Tarefas por Categoria */}
       <div className="mb-6">
         <div className="card">
@@ -364,20 +529,45 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         </div>
       </div>
 
-      {/* Form de nova tarefa */}
+      {/* Form de nova/editar tarefa */}
       {showForm && (
         <div className="card mb-4 animate-fade" style={{ borderColor: 'var(--accent-blue)' }}>
-          <div className="section-title mb-3">Nova Tarefa</div>
+          <div className="section-title mb-3">{editingId ? 'Editar Tarefa' : 'Nova Tarefa'}</div>
           <div className="form-row">
             <div className="form-group" style={{ gridColumn: '1/-1' }}>
               <label className="label">Título</label>
               <input className="input" placeholder="Descreva a tarefa..." value={form.titulo} onChange={e => setForm({ ...form, titulo: e.target.value })} />
             </div>
             <div className="form-group">
-              <label className="label">Categoria</label>
+              <label className="label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                Categoria
+                <button type="button" onClick={() => setShowCatManager(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-blue)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Plus size={12} /> Gerenciar
+                </button>
+              </label>
               <select className="input" value={form.categoria} onChange={e => setForm({ ...form, categoria: e.target.value })}>
-                {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
+                {categoriasCustom.map(c => <option key={c}>{c}</option>)}
               </select>
+              {showCatManager && (
+                <div style={{ marginTop: 8, padding: 10, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <input className="input" style={{ fontSize: 12 }} placeholder="Nova categoria..." value={novaCategoria}
+                      onChange={e => setNovaCategoria(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addCategoria())} />
+                    <button type="button" className="btn btn-primary btn-sm" onClick={addCategoria}><Plus size={14} /></button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {categoriasCustom.map(c => (
+                      <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '2px 8px' }}>
+                        {c}
+                        <button type="button" onClick={() => removeCategoria(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', display: 'flex', padding: 0 }}>
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label className="label">Prioridade</label>
@@ -405,15 +595,15 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
             </div>
           </div>
           <div className="flex gap-2 mt-2">
-            <button className="btn btn-primary" onClick={handleAdd}>Salvar</button>
-            <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleAdd}>{editingId ? 'Atualizar' : 'Salvar'}</button>
+            <button className="btn btn-ghost" onClick={() => { setShowForm(false); setEditingId(null); setForm({ titulo: '', categoria: categoriasCustom[0], prioridade: 'Média', status: 'Pendente', tempoEstimado: '', tempoReal: '', data: hoje }); }}>Cancelar</button>
           </div>
         </div>
       )}
 
       {/* Filtros de tarefas */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {['Todas', 'Hoje', 'Ontem', 'Pendente', 'Em andamento', 'Concluída', ...CATEGORIAS].map(f => (
+        {['Todas', 'Hoje', 'Ontem', 'Pendente', 'Em andamento', 'Concluída', ...categoriasCustom].map(f => (
           <button key={f} className={`tab-btn ${activeFilter === f ? 'active' : ''}`} onClick={() => setActiveFilter(f)}>
             {f}
           </button>
@@ -427,11 +617,25 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         )}
         {filtered.map(t => {
           const StatusIcon = statusIcon[t.status] || Circle;
+          const isDragging = draggedId === t.id;
+          const isDragOver = dragOverId === t.id;
           return (
-            <div key={t.id} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0',
-              borderBottom: '1px solid var(--border)', opacity: t.status === 'Concluída' ? 0.7 : 1
-            }}>
+            <div key={t.id}
+              draggable
+              onDragStart={() => handleDragStart(t.id)}
+              onDragOver={(e) => handleDragOver(e, t.id)}
+              onDrop={(e) => handleDrop(e, t.id)}
+              onDragEnd={handleDragEnd}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0',
+                borderBottom: '1px solid var(--border)', opacity: isDragging ? 0.4 : (t.status === 'Concluída' ? 0.7 : 1),
+                borderTop: isDragOver && !isDragging ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                background: isDragOver && !isDragging ? 'rgba(59,130,246,0.05)' : 'transparent',
+                cursor: 'default', transition: 'background 0.15s'
+              }}>
+              <span style={{ cursor: 'grab', color: 'var(--text-muted)', flexShrink: 0, display: 'flex' }} title="Arraste para reordenar">
+                <GripVertical size={16} />
+              </span>
               <button
                 onClick={() => cycleStatus(t.id)}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: statusColor[t.status], padding: 0, flexShrink: 0 }}
@@ -451,7 +655,10 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
                   {t.tempoEstimado > 0 && <span className="text-muted text-xs">⏱️ {t.tempoEstimado}min</span>}
                 </div>
               </div>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(t.id)}>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleEdit(t)} title="Editar">
+                <Edit2 size={14} color="var(--accent-blue)" />
+              </button>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleDelete(t.id)} title="Excluir">
                 <Trash2 size={14} color="var(--accent-red)" />
               </button>
             </div>
