@@ -36,12 +36,11 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const [taskOrder, setTaskOrder] = useState(() => {
     try { return JSON.parse(localStorage.getItem('prodTaskOrder') || '[]'); } catch { return []; }
   });
-  const [categoriasCustom, setCategoriasCustom] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('prodCategorias') || 'null');
-      return Array.isArray(saved) && saved.length ? saved : ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro'];
-    } catch { return ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro']; }
-  });
+  const CATEGORIAS_PADRAO = ['Trabalho', 'Pessoal', 'Saúde', 'Estudos', 'Financeiro'];
+  // Lista de nomes de categorias (padrão + customizadas do Appwrite)
+  const [categoriasCustom, setCategoriasCustom] = useState(CATEGORIAS_PADRAO);
+  // Categorias customizadas com seus IDs do Appwrite (para poder excluir)
+  const [categoriasDocs, setCategoriasDocs] = useState([]);
   const [novaCategoria, setNovaCategoria] = useState('');
   const [showCatManager, setShowCatManager] = useState(false);
   const [taxaPeriodo, setTaxaPeriodo] = useState('hoje'); // hoje | ontem | semana | mes | todas
@@ -58,36 +57,70 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     return d.toISOString().split('T')[0];
   })();
 
-  // Persistir categorias custom
-  useEffect(() => {
-    localStorage.setItem('prodCategorias', JSON.stringify(categoriasCustom));
-  }, [categoriasCustom]);
-
   // Persistir ordem das tarefas
   useEffect(() => {
     localStorage.setItem('prodTaskOrder', JSON.stringify(taskOrder));
   }, [taskOrder]);
 
-  const addCategoria = () => {
+  const addCategoria = async () => {
     const nome = novaCategoria.trim();
     if (!nome) return;
     if (categoriasCustom.some(c => c.toLowerCase() === nome.toLowerCase())) {
       mostrarToast('Essa categoria já existe.', 'erro');
       return;
     }
-    setCategoriasCustom(prev => [...prev, nome]);
-    setNovaCategoria('');
-    mostrarToast('✅ Categoria adicionada!');
+    try {
+      const doc = await databases.createDocument(
+        DATABASE_ID,
+        COLLECTIONS.CATEGORIAS,
+        ID.unique(),
+        {
+          userId: user.$id,
+          tipo: 'tarefa',
+          nome,
+          cor: '#8b5cf6'
+        },
+        [
+          Permission.read(Role.user(user.$id)),
+          Permission.update(Role.user(user.$id)),
+          Permission.delete(Role.user(user.$id))
+        ]
+      );
+      setCategoriasDocs(prev => [...prev, { id: doc.$id, nome: doc.nome }]);
+      setCategoriasCustom(prev => [...prev, doc.nome]);
+      setNovaCategoria('');
+      mostrarToast('✅ Categoria adicionada!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao criar categoria:', error);
+      mostrarToast('❌ Erro ao salvar categoria.', 'erro');
+    }
   };
 
-  const removeCategoria = (nome) => {
+  const removeCategoria = async (nome) => {
     const emUso = tarefas.some(t => t.categoria === nome);
     if (emUso) {
       mostrarToast(`Categoria "${nome}" está em uso e não pode ser removida.`, 'erro');
       return;
     }
-    setCategoriasCustom(prev => prev.filter(c => c !== nome));
-    mostrarToast('🗑️ Categoria removida!');
+    if (CATEGORIAS_PADRAO.includes(nome)) {
+      mostrarToast('Categorias padrão não podem ser removidas.', 'erro');
+      return;
+    }
+    const doc = categoriasDocs.find(c => c.nome === nome);
+    if (!doc) {
+      // Não está no Appwrite (não deveria acontecer), só remove local
+      setCategoriasCustom(prev => prev.filter(c => c !== nome));
+      return;
+    }
+    try {
+      await databases.deleteDocument(DATABASE_ID, COLLECTIONS.CATEGORIAS, doc.id);
+      setCategoriasDocs(prev => prev.filter(c => c.id !== doc.id));
+      setCategoriasCustom(prev => prev.filter(c => c !== nome));
+      mostrarToast('🗑️ Categoria removida!');
+    } catch (error) {
+      console.error('❌ [Appwrite] Erro ao remover categoria:', error);
+      mostrarToast('❌ Erro ao remover categoria.', 'erro');
+    }
   };
 
   // Drag & drop de tarefas
@@ -134,9 +167,10 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const carregarDados = async (userId) => {
     setCarregando(true);
     try {
-      const [resProd, resAprov] = await Promise.all([
+      const [resProd, resAprov, resCat] = await Promise.all([
         databases.listDocuments(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, [Query.equal('userId', userId), Query.limit(500)]),
-        databases.listDocuments(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, [Query.equal('userId', userId), Query.limit(100)])
+        databases.listDocuments(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, [Query.equal('userId', userId), Query.limit(100)]),
+        databases.listDocuments(DATABASE_ID, COLLECTIONS.CATEGORIAS, [Query.equal('userId', userId), Query.equal('tipo', 'tarefa'), Query.limit(100)])
       ]);
 
       const todasTarefas = [];
@@ -166,6 +200,13 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         observacoes: d.observacoes || ''
       }));
       setAproveitamentoMensal(mappedAprov);
+
+      // Categorias de tarefa vindas do Appwrite
+      const catsDocs = resCat.documents.map(d => ({ id: d.$id, nome: d.nome }));
+      setCategoriasDocs(catsDocs);
+      // Mesclar padrões + customizadas (sem duplicar)
+      const nomesCustom = catsDocs.map(c => c.nome);
+      setCategoriasCustom([...CATEGORIAS_PADRAO, ...nomesCustom.filter(n => !CATEGORIAS_PADRAO.includes(n))]);
 
     } catch (error) {
       console.error('Erro ao buscar produtividade:', error);
@@ -557,14 +598,19 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
                     <button type="button" className="btn btn-primary btn-sm" onClick={addCategoria}><Plus size={14} /></button>
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {categoriasCustom.map(c => (
-                      <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '2px 8px' }}>
-                        {c}
-                        <button type="button" onClick={() => removeCategoria(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', display: 'flex', padding: 0 }}>
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
+                    {categoriasCustom.map(c => {
+                      const ehPadrao = CATEGORIAS_PADRAO.includes(c);
+                      return (
+                        <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '2px 8px', opacity: ehPadrao ? 0.7 : 1 }}>
+                          {c}
+                          {!ehPadrao && (
+                            <button type="button" onClick={() => removeCategoria(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', display: 'flex', padding: 0 }}>
+                              <X size={11} />
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
               )}
