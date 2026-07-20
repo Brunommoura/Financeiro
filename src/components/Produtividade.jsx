@@ -47,14 +47,25 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const [form, setForm] = useState({
     titulo: '', categoria: 'Trabalho', prioridade: 'Média',
     status: 'Pendente', tempoEstimado: '', tempoReal: '',
-    data: new Date().toISOString().split('T')[0]
+    data: (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })()
   });
 
-  const hoje = new Date().toISOString().split('T')[0];
+  // Data local (não UTC) para evitar que à noite o "hoje" pule para o dia seguinte
+  const dataLocal = (d = new Date()) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+
+  const hoje = dataLocal();
   const ontem = (() => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    return d.toISOString().split('T')[0];
+    return dataLocal(d);
   })();
 
   // Persistir ordem das tarefas
@@ -167,11 +178,34 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
   const carregarDados = async (userId) => {
     setCarregando(true);
     try {
+      // Buscar TODAS as tarefas com paginação (o limite padrão pode cortar registros novos)
+      const buscarTodos = async (collectionId, extraQueries = []) => {
+        let todos = [];
+        let offset = 0;
+        const batch = 100;
+        let total = null;
+        while (true) {
+          const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+            Query.equal('userId', userId),
+            ...extraQueries,
+            Query.limit(batch),
+            Query.offset(offset)
+          ]);
+          todos = [...todos, ...res.documents];
+          if (total === null) total = res.total;
+          if (todos.length >= total || res.documents.length < batch) break;
+          offset += batch;
+        }
+        return { documents: todos, total };
+      };
+
       const [resProd, resAprov, resCat] = await Promise.all([
-        databases.listDocuments(DATABASE_ID, COLLECTIONS.PRODUTIVIDADE, [Query.equal('userId', userId), Query.limit(500)]),
-        databases.listDocuments(DATABASE_ID, COLLECTIONS.APROVEITAMENTO, [Query.equal('userId', userId), Query.limit(100)]),
-        databases.listDocuments(DATABASE_ID, COLLECTIONS.CATEGORIAS, [Query.equal('userId', userId), Query.equal('tipo', 'tarefa'), Query.limit(100)])
+        buscarTodos(COLLECTIONS.PRODUTIVIDADE),
+        buscarTodos(COLLECTIONS.APROVEITAMENTO),
+        buscarTodos(COLLECTIONS.CATEGORIAS, [Query.equal('tipo', 'tarefa')])
       ]);
+
+      console.log(`📦 [Appwrite] Tarefas carregadas: ${resProd.documents.length} de ${resProd.total}`);
 
       const todasTarefas = [];
 
