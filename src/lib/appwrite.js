@@ -22,5 +22,6 @@ export const COLLECTIONS = {
   PRODUTIVIDADE: 'produtividade',
   APROVEITAMENTO: 'aproveitamento_mensal',
   CATEGORIAS: 'categorias_customizadas',
-  FEEDBACKS: 'feedbacks'
+  FEEDBACKS: 'feedbacks',
+  HISTORICO: 'historico_snapshots'
 };

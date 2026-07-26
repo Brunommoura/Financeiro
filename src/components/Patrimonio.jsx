@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
 import { formatCurrency, formatPercent } from '../utils/helpers';
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
+import { historicoService } from '../services/historicoService';
 
 const TIPOS = ['Conta Corrente', 'Poupança', 'Investimentos', 'Imóvel', 'Veículo', 'Previdência', 'Outros'];
 const COLORS = ['#3b82f6', '#10b981', '#8b5cf6', '#f97316', '#f59e0b', '#06b6d4', '#64748b'];
@@ -12,6 +13,13 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
   const [carregandoAtivos, setCarregandoAtivos] = useState(true);
   const [form, setForm] = useState({ tipo: 'Conta Corrente', instituicao: '', descricao: '', valorAtual: '', variacaoMensal: '' });
   const [editingId, setEditingId] = useState(null);
+  const [historico, setHistorico] = useState([]);
+
+  const carregarHistorico = async () => {
+    if (!user) return;
+    const snaps = await historicoService.listar(user.$id, 'patrimonio');
+    setHistorico(snaps);
+  };
 
   useEffect(() => {
     const buscarPatrimonio = async () => {
@@ -38,10 +46,32 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
         setCarregandoAtivos(false);
       }
     };
-    if (user) buscarPatrimonio();
+    if (user) { buscarPatrimonio(); carregarHistorico(); }
   }, [user, setPatrimonio]);
 
   const totalPatrimonio = useMemo(() => patrimonio.reduce((s, p) => s + p.valorAtual, 0), [patrimonio]);
+
+  // Evolução do patrimônio total ao longo do tempo (a partir dos snapshots)
+  const evolucaoHistorico = useMemo(() => {
+    if (!historico.length) return [];
+    // Para cada data de snapshot, calcular o valor total considerando o último valor
+    // conhecido de cada ativo até aquele momento
+    const ordenados = [...historico].sort((a, b) => new Date(a.data) - new Date(b.data));
+    const ultimoValorPorAtivo = {};
+    const pontos = [];
+
+    ordenados.forEach(snap => {
+      ultimoValorPorAtivo[snap.refId] = snap.valor;
+      const total = Object.values(ultimoValorPorAtivo).reduce((s, v) => s + v, 0);
+      const dataLabel = new Date(snap.data).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+      pontos.push({ data: dataLabel, total, timestamp: snap.data });
+    });
+
+    // Consolidar pontos do mesmo dia (mantém o último de cada dia)
+    const porDia = {};
+    pontos.forEach(p => { porDia[p.data] = p; });
+    return Object.values(porDia);
+  }, [historico]);
 
   const pieData = useMemo(() => {
     const map = {};
@@ -82,6 +112,10 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
           descricao: doc.descricao, valorAtual: doc.valorAtual, variacaoMensal: doc.variacaoMensal
         };
         setPatrimonio(prev => prev.map(a => a.id === editingId ? updated : a));
+        await historicoService.registrar({
+          userId: user.$id, tipo: 'patrimonio', refId: doc.$id,
+          nome: doc.descricao || doc.instituicao || doc.tipoAtivo, valor: doc.valorAtual
+        });
       } else {
         const doc = await databases.createDocument(
           DATABASE_ID,
@@ -107,8 +141,13 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
           descricao: doc.descricao, valorAtual: doc.valorAtual, variacaoMensal: doc.variacaoMensal
         };
         setPatrimonio(prev => [...prev, novo]);
+        await historicoService.registrar({
+          userId: user.$id, tipo: 'patrimonio', refId: doc.$id,
+          nome: doc.descricao || doc.instituicao || doc.tipoAtivo, valor: doc.valorAtual
+        });
       }
       setShowForm(false);
+      carregarHistorico();
     } catch (e) {
       console.error(e);
       alert('Erro ao salvar ativo.');
@@ -293,6 +332,28 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* Evolução do Patrimônio (histórico de snapshots) */}
+          <div className="card mt-4">
+            <div className="section-title mb-3">📈 Evolução do Patrimônio</div>
+            {evolucaoHistorico.length < 2 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '16px 0' }}>
+                O gráfico de evolução aparecerá conforme você atualizar seus ativos ao longo do tempo.
+                Cada vez que você editar um valor, um novo ponto será registrado aqui.
+                {evolucaoHistorico.length === 1 && ' (1 registro até agora)'}
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={evolucaoHistorico}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="data" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                  <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
+                  <Line type="monotone" dataKey="total" name="Patrimônio Total" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </>
       )}

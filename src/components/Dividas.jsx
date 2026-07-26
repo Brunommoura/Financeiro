@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Plus, Trash2, Edit2, Calculator } from 'lucide-react';
 import { formatCurrency, formatPercent } from '../utils/helpers';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { databases, COLLECTIONS, DATABASE_ID, ID, Permission, Role, Query } from '../lib/appwrite';
+import { historicoService } from '../services/historicoService';
 
 const TIPOS = ['Empréstimo', 'Financiamento', 'Cartão', 'Cheque Especial', 'Outros'];
 
@@ -12,6 +14,13 @@ export default function Dividas({ dividasList, setDividasList, user }) {
   const [form, setForm] = useState({ tipo: 'Financiamento', credor: '', descricao: '', valorOriginal: '', saldoDevedor: '', taxaJuros: '', parcelaMensal: '', dataQuitacao: '' });
   const [editingId, setEditingId] = useState(null);
   const [carregandoDividas, setCarregandoDividas] = useState(true);
+  const [historico, setHistorico] = useState([]);
+
+  const carregarHistorico = async () => {
+    if (!user) return;
+    const snaps = await historicoService.listar(user.$id, 'divida');
+    setHistorico(snaps);
+  };
 
   useEffect(() => {
     const buscarDividas = async () => {
@@ -43,6 +52,25 @@ export default function Dividas({ dividasList, setDividasList, user }) {
     };
     if (user) buscarDividas();
   }, [user, setDividasList]);
+
+  useEffect(() => { if (user) carregarHistorico(); }, [user]);
+
+  // Evolução do total de dívidas ao longo do tempo (snapshots)
+  const evolucaoHistorico = useMemo(() => {
+    if (!historico.length) return [];
+    const ordenados = [...historico].sort((a, b) => new Date(a.data) - new Date(b.data));
+    const ultimoValorPorDivida = {};
+    const pontos = [];
+    ordenados.forEach(snap => {
+      ultimoValorPorDivida[snap.refId] = snap.valor;
+      const total = Object.values(ultimoValorPorDivida).reduce((s, v) => s + v, 0);
+      const dataLabel = new Date(snap.data).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+      pontos.push({ data: dataLabel, total });
+    });
+    const porDia = {};
+    pontos.forEach(p => { porDia[p.data] = p; });
+    return Object.values(porDia);
+  }, [historico]);
 
   const totalDividas = useMemo(() => dividasList.reduce((s, d) => s + d.saldoDevedor, 0), [dividasList]);
 
@@ -81,6 +109,10 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           parcelaMensal: doc.parcelaMensal, dataQuitacao: doc.dataQuitacao ? doc.dataQuitacao.split('T')[0] : ''
         };
         setDividasList(prev => prev.map(d => d.id === editingId ? updated : d));
+        await historicoService.registrar({
+          userId: user.$id, tipo: 'divida', refId: doc.$id,
+          nome: doc.credor, valor: doc.saldoDevedor
+        });
       } else {
         const doc = await databases.createDocument(
           DATABASE_ID,
@@ -108,8 +140,13 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           parcelaMensal: doc.parcelaMensal, dataQuitacao: doc.dataQuitacao ? doc.dataQuitacao.split('T')[0] : ''
         };
         setDividasList(prev => [...prev, novo]);
+        await historicoService.registrar({
+          userId: user.$id, tipo: 'divida', refId: doc.$id,
+          nome: doc.credor, valor: doc.saldoDevedor
+        });
       }
       setShowForm(false);
+      carregarHistorico();
     } catch (e) {
       console.error(e);
       alert('Erro ao salvar dívida.');
@@ -336,6 +373,28 @@ export default function Dividas({ dividasList, setDividasList, user }) {
           })}
         </div>
       )}
+
+      {/* Evolução das Dívidas (histórico de snapshots) */}
+      <div className="card mt-4">
+        <div className="section-title mb-3">📉 Evolução das Dívidas</div>
+        {evolucaoHistorico.length < 2 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '16px 0' }}>
+            O gráfico de evolução aparecerá conforme você atualizar suas dívidas ao longo do tempo.
+            Cada vez que você editar um saldo devedor, um novo ponto será registrado aqui.
+            {evolucaoHistorico.length === 1 && ' (1 registro até agora)'}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={evolucaoHistorico}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis dataKey="data" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+              <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
+              <Line type="monotone" dataKey="total" name="Total de Dívidas" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
     </div>
   );
 }

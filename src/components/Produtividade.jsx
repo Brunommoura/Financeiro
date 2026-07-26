@@ -30,6 +30,12 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     return idx >= 0 && idx < 12 ? `${nomesMeses[idx]}/${ano}` : mesAno;
   };
   const [activeFilter, setActiveFilter] = useState('Todas');
+  const [subView, setSubView] = useState('lista'); // 'lista' | 'calendario'
+  const [calMonth, setCalMonth] = useState(() => {
+    const d = new Date();
+    return { ano: d.getFullYear(), mes: d.getMonth() }; // mes 0-11
+  });
+  const [calSelectedDay, setCalSelectedDay] = useState(null); // "YYYY-MM-DD"
   const [editingId, setEditingId] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
@@ -426,12 +432,61 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
     }
   };
 
+  // Data-limite de arquivamento: tarefas com mais de 30 dias ficam "arquivadas"
+  const limiteArquivo = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return dataLocal(d);
+  })();
+  const isArquivada = (t) => toISODate(t.data) < limiteArquivo;
+
+  // ===== Calendário =====
+  const calendarioDados = useMemo(() => {
+    const { ano, mes } = calMonth;
+    const primeiroDia = new Date(ano, mes, 1);
+    const ultimoDia = new Date(ano, mes + 1, 0);
+    const diasNoMes = ultimoDia.getDate();
+    const inicioSemana = primeiroDia.getDay(); // 0=domingo
+
+    // Contar tarefas por dia (YYYY-MM-DD)
+    const porDia = {};
+    tarefas.forEach(t => {
+      const d = toISODate(t.data);
+      if (!porDia[d]) porDia[d] = [];
+      porDia[d].push(t);
+    });
+
+    const celulas = [];
+    // Células vazias antes do dia 1
+    for (let i = 0; i < inicioSemana; i++) celulas.push(null);
+    // Dias do mês
+    for (let dia = 1; dia <= diasNoMes; dia++) {
+      const iso = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+      celulas.push({ dia, iso, tarefas: porDia[iso] || [] });
+    }
+    return celulas;
+  }, [calMonth, tarefas]);
+
+  const tarefasDoDia = useMemo(() => {
+    if (!calSelectedDay) return [];
+    return tarefas.filter(t => toISODate(t.data) === calSelectedDay);
+  }, [calSelectedDay, tarefas]);
+
+  const mudarMesCal = (delta) => {
+    setCalMonth(prev => {
+      const nova = new Date(prev.ano, prev.mes + delta, 1);
+      return { ano: nova.getFullYear(), mes: nova.getMonth() };
+    });
+    setCalSelectedDay(null);
+  };
+
   const filtered = useMemo(() => {
     let base;
-    if (activeFilter === 'Todas') base = tarefas;
+    if (activeFilter === 'Arquivadas') base = tarefas.filter(isArquivada);
+    else if (activeFilter === 'Todas') base = tarefas.filter(t => !isArquivada(t));
     else if (activeFilter === 'Hoje') base = tarefas.filter(t => toISODate(t.data) === hoje);
     else if (activeFilter === 'Ontem') base = tarefas.filter(t => toISODate(t.data) === ontem);
-    else base = tarefas.filter(t => t.status === activeFilter || t.categoria === activeFilter);
+    else base = tarefas.filter(t => !isArquivada(t) && (t.status === activeFilter || t.categoria === activeFilter));
 
     // Aplicar ordem manual (drag & drop) quando houver
     if (taskOrder.length > 0) {
@@ -442,7 +497,7 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
       base = [...base].sort((a, b) => idx(a.id) - idx(b.id));
     }
     return base;
-  }, [tarefas, activeFilter, hoje, ontem, taskOrder]);
+  }, [tarefas, activeFilter, hoje, ontem, taskOrder, limiteArquivo]);
 
   const concluidas = tarefas.filter(t => t.status === 'Concluída');
   const taxaConclusao = tarefas.length > 0 ? (concluidas.length / tarefas.length) * 100 : 0;
@@ -681,9 +736,17 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
         </div>
       )}
 
+      {/* Toggle Lista / Calendário */}
+      <div className="tabs mb-4" style={{ padding: 3, gap: 2, display: 'inline-flex' }}>
+        <button className={`tab-btn ${subView === 'lista' ? 'active' : ''}`} onClick={() => setSubView('lista')}>📋 Lista</button>
+        <button className={`tab-btn ${subView === 'calendario' ? 'active' : ''}`} onClick={() => setSubView('calendario')}>📅 Calendário</button>
+      </div>
+
+      {subView === 'lista' && (
+      <>
       {/* Filtros de tarefas */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {['Todas', 'Hoje', 'Ontem', 'Pendente', 'Em andamento', 'Concluída', ...categoriasCustom].map(f => (
+        {['Todas', 'Hoje', 'Ontem', 'Pendente', 'Em andamento', 'Concluída', ...categoriasCustom, 'Arquivadas'].map(f => (
           <button key={f} className={`tab-btn ${activeFilter === f ? 'active' : ''}`} onClick={() => setActiveFilter(f)}>
             {f}
           </button>
@@ -745,6 +808,106 @@ export default function Produtividade({ tarefas, setTarefas, habitos, setHabitos
           );
         })}
       </div>
+      </>
+      )}
+
+      {subView === 'calendario' && (
+        <div className="card">
+          {/* Cabeçalho de navegação do calendário */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => mudarMesCal(-1)}>‹ Anterior</button>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>
+              {['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'][calMonth.mes]} / {calMonth.ano}
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => mudarMesCal(1)}>Próximo ›</button>
+          </div>
+
+          {/* Cabeçalho dos dias da semana */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, marginBottom: 4 }}>
+            {['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d => (
+              <div key={d} style={{ textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', padding: '4px 0' }}>{d}</div>
+            ))}
+          </div>
+
+          {/* Grade do calendário */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+            {calendarioDados.map((cel, i) => {
+              if (!cel) return <div key={`empty-${i}`} />;
+              const ehHoje = cel.iso === hoje;
+              const selecionado = cel.iso === calSelectedDay;
+              const qtd = cel.tarefas.length;
+              const concluidas = cel.tarefas.filter(t => t.status === 'Concluída').length;
+              return (
+                <button
+                  key={cel.iso}
+                  onClick={() => setCalSelectedDay(selecionado ? null : cel.iso)}
+                  style={{
+                    aspectRatio: '1', border: ehHoje ? '2px solid var(--accent-blue)' : '1px solid var(--border)',
+                    borderRadius: 8, background: selecionado ? 'var(--accent-blue)' : (qtd > 0 ? 'var(--bg-secondary)' : 'transparent'),
+                    color: selecionado ? '#fff' : 'var(--text-primary)',
+                    cursor: 'pointer', padding: 4, display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'flex-start', position: 'relative', minHeight: 48
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: ehHoje ? 700 : 500 }}>{cel.dia}</span>
+                  {qtd > 0 && (
+                    <span style={{
+                      fontSize: 9, marginTop: 2, padding: '1px 5px', borderRadius: 8,
+                      background: selecionado ? 'rgba(255,255,255,0.25)' : 'var(--accent-purple)',
+                      color: '#fff', fontWeight: 600
+                    }}>
+                      {concluidas}/{qtd}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Legenda */}
+          <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+            <span>🔵 Hoje</span>
+            <span>🟣 Badge = concluídas/total do dia</span>
+          </div>
+
+          {/* Tarefas do dia selecionado */}
+          {calSelectedDay && (
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+                Tarefas de {formatDate(calSelectedDay)}
+              </div>
+              {tarefasDoDia.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Nenhuma tarefa neste dia.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {tarefasDoDia.map(t => {
+                    const StatusIcon = statusIcon[t.status] || Circle;
+                    return (
+                      <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                        <button onClick={() => cycleStatus(t.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: statusColor[t.status], padding: 0, flexShrink: 0 }}>
+                          <StatusIcon size={18} />
+                        </button>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.status === 'Concluída' ? 'line-through' : 'none', color: t.status === 'Concluída' ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+                            {t.titulo || t.tarefa}
+                          </div>
+                          <div className="flex gap-2 mt-1 flex-wrap">
+                            <span className="badge badge-gray" style={{ fontSize: 10 }}>{t.categoria}</span>
+                            <span className="badge" style={{ fontSize: 10, background: `${priorColor[t.prioridade]}22`, color: priorColor[t.prioridade] }}>{t.prioridade}</span>
+                          </div>
+                        </div>
+                        <button className="btn btn-ghost btn-icon btn-sm" onClick={() => handleEdit(t)} title="Editar">
+                          <Edit2 size={14} color="var(--accent-blue)" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Seção Aproveitamento Mensal */}
       <div className="section-header mt-8 mb-4">
