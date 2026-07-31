@@ -11,6 +11,7 @@ import Metas from './components/Metas';
 import Produtividade from './components/Produtividade';
 import Feedback from './components/Feedback';
 import Instrucoes from './components/Instrucoes';
+import Notas from './components/Notas';
 import ToastContainer from './components/Toast';
 import StatusConexao from './components/StatusConexao';
 import { initVerificarPersistencia } from './utils/verificarPersistencia';
@@ -281,6 +282,8 @@ function FinanceApp({ user, logout }) {
         return <Feedback user={user} />;
       case 'instrucoes':
         return <Instrucoes />;
+      case 'notas':
+        return <Notas user={user} />;
       default:
         return null;
     }

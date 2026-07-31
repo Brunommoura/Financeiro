@@ -23,5 +23,6 @@ export const COLLECTIONS = {
   APROVEITAMENTO: 'aproveitamento_mensal',
   CATEGORIAS: 'categorias_customizadas',
   FEEDBACKS: 'feedbacks',
-  HISTORICO: 'historico_snapshots'
+  HISTORICO: 'historico_snapshots',
+  NOTAS: 'notas'
 };
