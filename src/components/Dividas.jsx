@@ -64,12 +64,16 @@ export default function Dividas({ dividasList, setDividasList, user }) {
     ordenados.forEach(snap => {
       ultimoValorPorDivida[snap.refId] = snap.valor;
       const total = Object.values(ultimoValorPorDivida).reduce((s, v) => s + v, 0);
-      const dataLabel = new Date(snap.data).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
-      pontos.push({ data: dataLabel, total });
+      // Rótulo com data e hora (cada edição vira um ponto próprio)
+      const d = new Date(snap.data);
+      const dataLabel = d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }) + ' ' +
+        d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      pontos.push({ data: dataLabel, total, ts: snap.data });
     });
-    const porDia = {};
-    pontos.forEach(p => { porDia[p.data] = p; });
-    return Object.values(porDia);
+    // Consolidar por data+hora (mantém o último de cada minuto)
+    const porMomento = {};
+    pontos.forEach(p => { porMomento[p.data] = p; });
+    return Object.values(porMomento).sort((a, b) => new Date(a.ts) - new Date(b.ts));
   }, [historico]);
 
   // Histórico detalhado (lista de registros, mais recentes primeiro)

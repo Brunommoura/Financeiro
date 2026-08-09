@@ -73,6 +73,18 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
     return Object.values(porDia);
   }, [historico]);
 
+  // Histórico detalhado (lista de registros, mais recentes primeiro)
+  const historicoDetalhado = useMemo(() => {
+    return [...historico]
+      .sort((a, b) => new Date(b.data) - new Date(a.data))
+      .map(h => ({
+        id: h.$id,
+        nome: h.nome || 'Ativo',
+        valor: h.valor,
+        data: new Date(h.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      }));
+  }, [historico]);
+
   const pieData = useMemo(() => {
     const map = {};
     patrimonio.forEach(p => { map[p.tipo] = (map[p.tipo] || 0) + p.valorAtual; });
@@ -334,25 +346,35 @@ export default function Patrimonio({ patrimonio, setPatrimonio, user }) {
             </div>
           </div>
 
-          {/* Evolução do Patrimônio (histórico de snapshots) */}
+          {/* Registros de Edições do Patrimônio */}
           <div className="card mt-4">
-            <div className="section-title mb-3">📈 Evolução do Patrimônio</div>
-            {evolucaoHistorico.length < 2 ? (
+            <div className="section-title mb-3">📋 Registros de Edições</div>
+            {historicoDetalhado.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '16px 0' }}>
-                O gráfico de evolução aparecerá conforme você atualizar seus ativos ao longo do tempo.
-                Cada vez que você editar um valor, um novo ponto será registrado aqui.
-                {evolucaoHistorico.length === 1 && ' (1 registro até agora)'}
+                Ainda não há registros. Cada vez que você criar ou editar um ativo,
+                o valor será guardado aqui para acompanhar a evolução (visível também no Dashboard).
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={evolucaoHistorico}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="data" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                  <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
-                  <Line type="monotone" dataKey="total" name="Patrimônio Total" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
+              <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                <table className="table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th>Ativo</th>
+                      <th style={{ textAlign: 'right' }}>Valor</th>
+                      <th style={{ textAlign: 'right' }}>Data/Hora</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historicoDetalhado.map(h => (
+                      <tr key={h.id}>
+                        <td style={{ fontSize: 13 }}>{h.nome}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--accent-green)' }}>{formatCurrency(h.valor)}</td>
+                        <td style={{ textAlign: 'right', fontSize: 12, color: 'var(--text-muted)' }}>{h.data}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </>
