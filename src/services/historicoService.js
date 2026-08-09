@@ -13,7 +13,7 @@ export const historicoService = {
   // Registra um snapshot. Falha de forma silenciosa (não quebra o fluxo principal).
   async registrar({ userId, tipo, refId, nome, valor }) {
     try {
-      await databases.createDocument(
+      const doc = await databases.createDocument(
         DATABASE_ID,
         COLLECTIONS.HISTORICO,
         ID.unique(),
@@ -31,9 +31,11 @@ export const historicoService = {
           Permission.delete(Role.user(userId))
         ]
       );
+      console.log(`✅ [Histórico] Snapshot registrado (${tipo}):`, doc.$id, '| valor:', valor);
+      return doc;
     } catch (e) {
-      // Se a collection ainda não existir, apenas avisa no console sem quebrar o app
-      console.warn('⚠️ Não foi possível registrar snapshot de histórico:', e.message);
+      console.error(`❌ [Histórico] FALHA ao registrar snapshot (${tipo}):`, e.message);
+      return null;
     }
   },
 
@@ -56,9 +58,10 @@ export const historicoService = {
         if (todos.length >= total || res.documents.length < batch) break;
         offset += batch;
       }
+      console.log(`📊 [Histórico] ${todos.length} snapshot(s) carregado(s) para tipo "${tipo}"`);
       return todos.sort((a, b) => new Date(a.data) - new Date(b.data));
     } catch (e) {
-      console.warn('⚠️ Não foi possível listar histórico:', e.message);
+      console.error(`❌ [Histórico] FALHA ao listar (${tipo}):`, e.message);
       return [];
     }
   }

@@ -72,6 +72,18 @@ export default function Dividas({ dividasList, setDividasList, user }) {
     return Object.values(porDia);
   }, [historico]);
 
+  // Histórico detalhado (lista de registros, mais recentes primeiro)
+  const historicoDetalhado = useMemo(() => {
+    return [...historico]
+      .sort((a, b) => new Date(b.data) - new Date(a.data))
+      .map(h => ({
+        id: h.$id,
+        nome: h.nome || 'Dívida',
+        valor: h.valor,
+        data: new Date(h.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      }));
+  }, [historico]);
+
   const totalDividas = useMemo(() => dividasList.reduce((s, d) => s + d.saldoDevedor, 0), [dividasList]);
 
   const handleOpenForm = (divida = null) => {
@@ -377,22 +389,57 @@ export default function Dividas({ dividasList, setDividasList, user }) {
       {/* Evolução das Dívidas (histórico de snapshots) */}
       <div className="card mt-4">
         <div className="section-title mb-3">📉 Evolução das Dívidas</div>
-        {evolucaoHistorico.length < 2 ? (
+        {historico.length === 0 ? (
           <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '16px 0' }}>
-            O gráfico de evolução aparecerá conforme você atualizar suas dívidas ao longo do tempo.
-            Cada vez que você editar um saldo devedor, um novo ponto será registrado aqui.
-            {evolucaoHistorico.length === 1 && ' (1 registro até agora)'}
+            Ainda não há registros de histórico. Cada vez que você criar ou editar uma dívida,
+            um registro com o saldo devedor será guardado aqui para acompanhar a evolução.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={evolucaoHistorico}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="data" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
-              <Line type="monotone" dataKey="total" name="Total de Dívidas" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <>
+            {evolucaoHistorico.length >= 2 && (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={evolucaoHistorico}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="data" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                  <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }} />
+                  <Line type="monotone" dataKey="total" name="Total de Dívidas" stroke="#ef4444" strokeWidth={3} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+            {evolucaoHistorico.length === 1 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '4px 0 12px' }}>
+                📌 Você tem 1 registro. O gráfico de linha aparecerá quando houver ao menos 2 registros em datas diferentes.
+              </div>
+            )}
+
+            {/* Tabela de registros */}
+            <div style={{ marginTop: evolucaoHistorico.length >= 2 ? 16 : 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
+                Registros ({historicoDetalhado.length})
+              </div>
+              <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                <table className="table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th>Dívida</th>
+                      <th style={{ textAlign: 'right' }}>Saldo Devedor</th>
+                      <th style={{ textAlign: 'right' }}>Data/Hora</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historicoDetalhado.map(h => (
+                      <tr key={h.id}>
+                        <td style={{ fontSize: 13 }}>{h.nome}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--accent-red)' }}>{formatCurrency(h.valor)}</td>
+                        <td style={{ textAlign: 'right', fontSize: 12, color: 'var(--text-muted)' }}>{h.data}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </div>
